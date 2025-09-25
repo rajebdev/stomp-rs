@@ -27,7 +27,6 @@ pub struct BrokerConfig {
     pub port: u16,
     pub credentials: Option<CredentialsConfig>,
     pub heartbeat: HeartbeatConfig,
-    pub retry: RetryConfig,
     pub headers: HashMap<String, String>,
 }
 
@@ -67,7 +66,8 @@ pub struct DestinationConfig {
 pub struct ConsumersConfig {
     pub ack_mode: String,
     pub workers_per_queue: HashMap<String, u32>,
-    pub retry: RetryConfig,
+    #[serde(default)]
+    pub workers_per_topic: HashMap<String, u32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -87,47 +87,85 @@ impl Config {
     pub fn load(path: &str) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path))?;
-        
+
         let config: Config = serde_yaml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path))?;
-        
+
         Ok(config)
     }
-    
+
     /// Get the broker connection URL
     pub fn get_broker_url(&self) -> String {
         format!("{}:{}", self.broker.host, self.broker.port)
     }
-    
+
     /// Get credentials if available
     pub fn get_credentials(&self) -> Option<(String, String)> {
-        self.broker.credentials.as_ref()
+        self.broker
+            .credentials
+            .as_ref()
             .map(|creds| (creds.username.clone(), creds.password.clone()))
     }
-    
+
     /// Get a specific queue configuration
     pub fn get_queue_config(&self, name: &str) -> Option<&DestinationConfig> {
         self.destinations.queues.get(name)
     }
-    
+
     /// Get a specific topic configuration
     pub fn get_topic_config(&self, name: &str) -> Option<&DestinationConfig> {
         self.destinations.topics.get(name)
     }
-    
+
     /// Get heartbeat settings in milliseconds (converting from seconds)
     pub fn get_heartbeat_ms(&self) -> (u32, u32) {
         (
             self.broker.heartbeat.client_send_secs * 1000,
-            self.broker.heartbeat.client_receive_secs * 1000
+            self.broker.heartbeat.client_receive_secs * 1000,
         )
+    }
+
+    /// Get number of workers for a specific queue (default: 1)
+    pub fn get_queue_workers(&self, queue_name: &str) -> u32 {
+        self.consumers
+            .workers_per_queue
+            .get(queue_name)
+            .copied()
+            .unwrap_or(1)
+    }
+
+    /// Get number of workers for a specific topic (default: 1)
+    pub fn get_topic_workers(&self, topic_name: &str) -> u32 {
+        self.consumers
+            .workers_per_topic
+            .get(topic_name)
+            .copied()
+            .unwrap_or(1)
+    }
+
+    /// Get all configured queues with their worker counts
+    pub fn get_all_queue_workers(&self) -> Vec<(String, u32)> {
+        self.destinations
+            .queues
+            .keys()
+            .map(|name| (name.clone(), self.get_queue_workers(name)))
+            .collect()
+    }
+
+    /// Get all configured topics with their worker counts
+    pub fn get_all_topic_workers(&self) -> Vec<(String, u32)> {
+        self.destinations
+            .topics
+            .keys()
+            .map(|name| (name.clone(), self.get_topic_workers(name)))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_config_parsing() {
         let yaml_content = r#"
@@ -145,11 +183,6 @@ broker:
   heartbeat:
     client_send_secs: 30
     client_receive_secs: 30
-  retry:
-    max_attempts: 3
-    initial_delay_secs: 1
-    max_delay_secs: 60
-    backoff_multiplier: 2.0
   headers: {}
 
 destinations:
@@ -166,11 +199,6 @@ consumers:
   ack_mode: "client_individual"
   workers_per_queue:
     test: 1
-  retry:
-    max_attempts: 3
-    initial_delay_secs: 1
-    max_delay_secs: 30
-    backoff_multiplier: 2.0
 
 logging:
   level: "info"
@@ -180,16 +208,16 @@ shutdown:
   timeout_secs: 30
   grace_period_secs: 5
         "#;
-        
+
         let config: Config = serde_yaml::from_str(yaml_content).unwrap();
         assert_eq!(config.service.name, "test-service");
         assert_eq!(config.broker.host, "localhost");
         assert_eq!(config.broker.port, 61613);
-        
+
         let (username, password) = config.get_credentials().unwrap();
         assert_eq!(username, "admin");
         assert_eq!(password, "admin");
-        
+
         let (send_ms, recv_ms) = config.get_heartbeat_ms();
         assert_eq!(send_ms, 30000);
         assert_eq!(recv_ms, 30000);

@@ -18,20 +18,13 @@ broker:
   
   # Authentication (optional) - matching reference implementation
   credentials:
-    username: "sullivan"     # Override with: STOMP_BROKER_USERNAME
-    password: "m1k4d0"       # Override with: STOMP_BROKER_PASSWORD
+    username: "admin"     # Override with: STOMP_BROKER_USERNAME
+    password: "admin"       # Override with: STOMP_BROKER_PASSWORD
   
   # Connection heartbeat settings (matching reference: 5000ms send, 2000ms receive)
   heartbeat:
     client_send_secs: 30         # Heartbeat interval for client->server (converted to ms internally)
     client_receive_secs: 30      # Expected heartbeat interval from server (converted to ms internally)
-  
-  # Connection retry settings
-  retry:
-    max_attempts: 5
-    initial_delay_secs: 1
-    max_delay_secs: 60
-    backoff_multiplier: 2.0
   
   # Custom headers to send with CONNECT frame
   headers: {}
@@ -81,18 +74,16 @@ consumers:
   # Acknowledgment mode - always use client_individual for precise control
   ack_mode: "client_individual"
   
-  # Number of worker threads per queue (topics always get 1 worker)
+  # Number of worker threads per queue
   workers_per_queue:
     default: 2         # 2 workers for default queue
     api_requests: 4    # 4 workers for high-volume API requests
     errors: 1          # 1 worker for error queue
   
-  # Message processing retry configuration
-  retry:
-    max_attempts: 3
-    initial_delay_secs: 1
-    max_delay_secs: 30
-    backoff_multiplier: 2.0
+  # Number of worker threads per topic
+  workers_per_topic:
+    notifications: 2   # 2 workers for notifications topic
+    events: 1          # 1 worker for events topic
 
 # Logging configuration  
 logging:

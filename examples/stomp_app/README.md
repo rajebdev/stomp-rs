@@ -1,6 +1,6 @@
-# STOMP Service Application
+# STOMP Multi-Subscriber Application
 
-A complete Rust application implementing STOMP (Simple Text Orientated Messaging Protocol) functionality with topic and queue messaging capabilities.
+A high-performance Rust application implementing STOMP (Simple Text Orientated Messaging Protocol) with **multi-subscriber architecture** for concurrent message processing across topics and queues.
 
 ## Architecture
 
@@ -15,6 +15,13 @@ The application follows a modular architecture with the following components:
 
 ### Features
 
+✅ **Multi-Subscriber Architecture** ⭐ **NEW**
+- Configure multiple concurrent subscribers per destination
+- Load distribution for queues (competing consumers)
+- Broadcasting for topics (all subscribers receive messages)
+- Individual connection management per subscriber
+- Subscriber-specific logging and monitoring
+
 ✅ **Complete STOMP Integration**
 - Send messages to topics and queues
 - Receive messages with custom handlers
@@ -22,7 +29,7 @@ The application follows a modular architecture with the following components:
 - Graceful connection management
 
 ✅ **Configuration Management**
-- YAML-based configuration
+- YAML-based configuration with `workers_per_queue` and `workers_per_topic`
 - Environment variable overrides
 - Broker connection settings
 - Destination management
@@ -34,7 +41,7 @@ The application follows a modular architecture with the following components:
 - Message processing metrics
 
 ✅ **Production Ready**
-- Graceful shutdown on SIGTERM/SIGINT
+- Coordinated graceful shutdown for all subscribers
 - Connection retry logic
 - Heartbeat configuration
 - Timeout handling
@@ -48,7 +55,7 @@ The application follows a modular architecture with the following components:
 
 ### Configuration
 
-Update `config.yaml` with your broker details:
+Update `config.yaml` with your broker details and **multi-subscriber settings**:
 
 ```yaml
 service:
@@ -65,7 +72,21 @@ broker:
   heartbeat:
     client_send_secs: 10000
     client_receive_secs: 10000
-  # ... additional configuration
+
+# ⭐ NEW: Multi-subscriber configuration
+consumers:
+  ack_mode: "client_individual"
+  
+  # Number of concurrent workers per queue (load distribution)
+  workers_per_queue:
+    default: 2         # 2 workers for default queue
+    api_requests: 4    # 4 workers for high-volume API requests  
+    errors: 1          # 1 worker for error queue
+  
+  # Number of concurrent workers per topic (broadcasting)
+  workers_per_topic:
+    notifications: 2   # 2 workers for notifications topic
+    events: 1          # 1 worker for events topic
 ```
 
 ### Running the Application
@@ -82,14 +103,68 @@ cargo build --release
 ### Example Output
 
 ```
-🚀 Starting STOMP Application: stomp-service
+🚀 Starting Multi-Subscriber STOMP Application: stomp-service
 📋 Version: 1.0.0
 🔗 Broker: 10.0.7.127:31333
-📤 Sending test messages...
+📊 Queue 'default' configured with 2 workers
+📊 Queue 'api_requests' configured with 4 workers
+📊 Queue 'errors' configured with 1 workers
+📊 Topic 'notifications' configured with 2 workers
+📊 Topic 'events' configured with 1 workers
+🔧 Spawning 10 total subscribers...
+[default][default#1] Starting subscriber...
+[default][default#2] Starting subscriber...
+[api_requests][api_requests#1] Starting subscriber...
+[notifications][notifications#1] Starting subscriber...
+[notifications][notifications#2] Starting subscriber...
+📤 Sending test messages to multiple subscribers...
 ✅ Test messages sent successfully
-📥 Starting topic consumer...
-📥 Starting queue consumer...
-🔄 Application running... Press Ctrl+C to shutdown gracefully
+🔄 Multi-subscriber system running... Press Ctrl+C to shutdown gracefully
+```
+
+## Multi-Subscriber Behavior
+
+### Queue Workers (Load Distribution)
+
+With multiple subscribers on a **queue**, messages are **distributed** among workers:
+
+```
+Queue: api_requests (4 workers)
+├─ api_requests#1 ← Message A
+├─ api_requests#2 ← Message B  
+├─ api_requests#3 ← Message C
+└─ api_requests#4 ← Message D
+```
+
+**Use Cases:**
+- High-throughput message processing
+- Load balancing across multiple workers
+- Parallel processing of independent tasks
+
+### Topic Workers (Broadcasting)
+
+With multiple subscribers on a **topic**, **all workers** receive each message:
+
+```
+Topic: notifications (2 workers)
+├─ notifications#1 ← Message X (copy 1)
+└─ notifications#2 ← Message X (copy 2)
+```
+
+**Use Cases:**
+- Event broadcasting to multiple handlers
+- Redundant processing for reliability
+- Different processing logic per subscriber
+
+### Subscriber Logging
+
+Each subscriber logs with a unique identifier for easy tracking:
+
+```
+[api_requests][api_requests#2] Processing queue message: {"order_id": 12345}
+[api_requests][api_requests#2] ✅ Message processed successfully in 45ms
+[notifications][notifications#1] Processing topic message: Event broadcast
+[notifications][notifications#2] Processing topic message: Event broadcast
 ```
 
 ## API Specification
@@ -183,6 +258,25 @@ broker:
     max_delay_secs: 60
     backoff_multiplier: 2.0
   headers: {}             # Custom connection headers
+```
+
+### Multi-Subscriber Settings ⭐ **NEW**
+
+```yaml
+consumers:
+  ack_mode: "client_individual"  # Acknowledgment mode
+  
+  # Queue workers (competing consumers)
+  workers_per_queue:
+    high_volume: 8      # 8 workers for load balancing
+    medium_load: 4      # 4 workers for moderate load
+    low_priority: 1     # Single worker for low-priority tasks
+    
+  # Topic workers (broadcast receivers)  
+  workers_per_topic:
+    events: 3           # 3 workers for event processing
+    notifications: 2    # 2 workers for notifications
+    monitoring: 1       # Single worker for monitoring
 ```
 
 ### Destinations
