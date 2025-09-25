@@ -96,7 +96,8 @@ logging:
 # Connection retry settings for auto-reconnect functionality
 retry:
   # Maximum number of reconnection attempts before giving up
-  max_attempts: 5  # Override with: STOMP_RETRY_MAX_ATTEMPTS
+  # Set to -1 for infinite retries (recommended for production)
+  max_attempts: -1  # Use positive number (e.g., 5) for finite retries
   
   # Initial delay in milliseconds for the first retry attempt
   initial_delay_ms: 1000  # Override with: STOMP_RETRY_INITIAL_DELAY_MS

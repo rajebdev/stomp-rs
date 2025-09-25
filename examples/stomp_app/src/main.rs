@@ -19,180 +19,84 @@ use service::StompService;
 /// Shared shutdown signal
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Subscriber type enumeration
-#[derive(Debug, Clone, PartialEq)]
-enum SubscriberType {
-    Queue,
-    Topic,
-}
+/// Create a queue message handler
+fn create_queue_handler(
+    queue_name: &str,
+) -> impl Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    let queue_name = queue_name.to_string();
+    move |msg: String| {
+        let queue_name = queue_name.clone();
+        Box::pin(async move {
+            let start_time = std::time::Instant::now();
+            info!(
+                "[{}] Processing queue message: {}",
+                queue_name,
+                msg.chars().take(50).collect::<String>()
+            );
 
-/// Run a single subscriber instance with auto-reconnection
-async fn run_subscriber(
-    dest_name: String,
-    subscriber_id: String,
-    subscriber_type: SubscriberType,
-    config: Config,
-    mut shutdown_rx: broadcast::Receiver<()>,
-) -> Result<()> {
-    let log_prefix = format!("[{}][{}]", dest_name, subscriber_id);
+            let result = MessageHandlers::queue_handler(msg).await;
 
-    info!("{} Starting subscriber with auto-reconnection...", log_prefix);
-
-    // Create dedicated STOMP service for this subscriber
-    let mut service = match StompService::new(config.clone()).await {
-        Ok(service) => service,
-        Err(e) => {
-            error!("{} Failed to create STOMP service: {}", log_prefix, e);
-            return Err(e);
-        }
-    };
-
-    // Main subscriber loop with reconnection handling
-    loop {
-        // Check for shutdown signal first
-        if let Ok(_) = shutdown_rx.try_recv() {
-            info!("{} Received shutdown signal, stopping subscriber...", log_prefix);
-            break;
-        }
-
-        // Ensure we're connected before attempting to subscribe
-        if !service.is_healthy() {
-            info!("{} Connection unhealthy, attempting reconnection...", log_prefix);
-            match service.reconnect().await {
+            let processing_time = start_time.elapsed();
+            match result {
                 Ok(()) => {
-                    info!("{} Reconnection successful, resuming subscription", log_prefix);
+                    info!(
+                        "[{}] ✅ Message processed successfully in {}ms",
+                        queue_name,
+                        processing_time.as_millis()
+                    );
                 }
                 Err(e) => {
-                    if is_shutdown_requested() {
-                        info!("{} Shutdown requested during reconnection, exiting", log_prefix);
-                        break;
-                    }
-                    error!("{} Reconnection failed permanently: {}", log_prefix, e);
+                    error!("[{}] ❌ Message processing failed: {}", queue_name, e);
                     return Err(e);
                 }
             }
-        }
+            Ok(())
+        }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+    }
+}
 
-        // Define the message handler with proper logging prefix
-        let handler = {
-            let log_prefix = log_prefix.clone();
-            let subscriber_type = subscriber_type.clone();
+/// Create a topic message handler
+fn create_topic_handler(
+    topic_name: &str,
+) -> impl Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    let topic_name = topic_name.to_string();
+    move |msg: String| {
+        let topic_name = topic_name.clone();
+        Box::pin(async move {
+            let start_time = std::time::Instant::now();
+            info!(
+                "[{}] Processing topic message: {}",
+                topic_name,
+                msg.chars().take(50).collect::<String>()
+            );
 
-            move |msg: String| {
-                let log_prefix = log_prefix.clone();
-                let subscriber_type = subscriber_type.clone();
+            let result = MessageHandlers::topic_handler(msg).await;
 
-                Box::pin(async move {
-                    let start_time = std::time::Instant::now();
-
+            let processing_time = start_time.elapsed();
+            match result {
+                Ok(()) => {
                     info!(
-                        "{} Processing {} message: {}",
-                        log_prefix,
-                        match subscriber_type {
-                            SubscriberType::Queue => "queue",
-                            SubscriberType::Topic => "topic",
-                        },
-                        msg.chars().take(50).collect::<String>()
+                        "[{}] ✅ Message processed successfully in {}ms",
+                        topic_name,
+                        processing_time.as_millis()
                     );
-
-                    // Call appropriate handler based on type
-                    let result = match subscriber_type {
-                        SubscriberType::Queue => MessageHandlers::queue_handler(msg).await,
-                        SubscriberType::Topic => MessageHandlers::topic_handler(msg).await,
-                    };
-
-                    let processing_time = start_time.elapsed();
-                    match result {
-                        Ok(()) => {
-                            info!(
-                                "{} ✅ Message processed successfully in {}ms",
-                                log_prefix,
-                                processing_time.as_millis()
-                            );
-                        }
-                        Err(e) => {
-                            error!("{} ❌ Message processing failed: {}", log_prefix, e);
-                            return Err(e);
-                        }
-                    }
-
-                    Ok(())
-                }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-            }
-        };
-
-        // Attempt to start the appropriate subscription with error handling
-        let receive_future = async {
-            match subscriber_type {
-                SubscriberType::Queue => {
-                    info!("{} 📥 Starting queue subscription...", log_prefix);
-                    service.receive_queue(&dest_name, handler).await
                 }
-                SubscriberType::Topic => {
-                    info!("{} 📥 Starting topic subscription...", log_prefix);
-                    service.receive_topic(&dest_name, handler).await
-                }
-            }
-        };
-
-        // Wait for either the receive future to complete or shutdown signal
-        let subscription_result = tokio::select! {
-            result = receive_future => result,
-            _ = shutdown_rx.recv() => {
-                info!("{} Received shutdown signal during subscription", log_prefix);
-                break;
-            }
-        };
-
-        // Handle subscription results
-        match subscription_result {
-            Ok(_) => {
-                info!("{} Subscription completed normally, checking connection health...", log_prefix);
-                // If subscription ended normally, check if it was due to connection issues
-                if !service.is_healthy() {
-                    warn!("{} Subscription ended due to connection loss, will attempt reconnection", log_prefix);
-                    // Continue the loop to attempt reconnection
-                    sleep(Duration::from_millis(1000)).await; // Brief pause before next iteration
-                    continue;
-                }
-                // If healthy disconnection, break the loop
-                break;
-            }
-            Err(e) => {
-                if is_shutdown_requested() {
-                    info!("{} Subscription stopped due to shutdown request", log_prefix);
-                    break;
-                }
-                
-                // Check if error is retryable
-                let error_str = e.to_string().to_lowercase();
-                let is_retryable = error_str.contains("connection") || 
-                                  error_str.contains("network") || 
-                                  error_str.contains("timeout") ||
-                                  error_str.contains("broken pipe") ||
-                                  error_str.contains("reset");
-                
-                if is_retryable {
-                    warn!("{} Subscription failed with retryable error: {}, marking connection unhealthy", log_prefix, e);
-                    // Connection will be handled at the start of the next loop iteration
-                    sleep(Duration::from_millis(1000)).await; // Brief pause before retry
-                    continue;
-                } else {
-                    error!("{} Subscription failed with non-retryable error: {}", log_prefix, e);
+                Err(e) => {
+                    error!("[{}] ❌ Message processing failed: {}", topic_name, e);
                     return Err(e);
                 }
             }
-        }
+            Ok(())
+        }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
     }
-
-    // Clean disconnect
-    if let Err(e) = service.disconnect().await {
-        warn!("{} Disconnect error: {}", log_prefix, e);
-    } else {
-        info!("{} Disconnected successfully", log_prefix);
-    }
-
-    Ok(())
 }
 
 #[tokio::main]
@@ -221,53 +125,57 @@ async fn main() -> Result<()> {
     // Create shutdown broadcast channel
     let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
 
-    // Create task collection for managing multiple subscribers
+    // Create task collection for managing subscribers
     let mut subscriber_tasks = JoinSet::new();
 
-    // Build list of all subscribers to spawn
-    let mut subscribers_to_spawn = Vec::new();
+    // Get all configured queues and topics
+    let queue_names = config.get_all_queue_names();
+    let topic_names = config.get_all_topic_names();
 
-    // Add queue subscribers
-    for (queue_name, worker_count) in config.get_all_queue_workers() {
+    info!(
+        "🔧 Setting up {} queues and {} topics...",
+        queue_names.len(),
+        topic_names.len()
+    );
+
+    // Start subscribers for each queue (workers will be managed internally by service)
+    for queue_name in queue_names {
+        let worker_count = config.get_queue_workers(&queue_name);
         info!(
             "📊 Queue '{}' configured with {} workers",
             queue_name, worker_count
         );
-        for worker_id in 0..worker_count {
-            let subscriber_id = format!("{}#{}", queue_name, worker_id + 1);
-            subscribers_to_spawn.push((queue_name.clone(), subscriber_id, SubscriberType::Queue));
-        }
+
+        let config_clone = config.clone();
+        let _shutdown_rx = shutdown_tx.subscribe();
+        let queue_name_clone = queue_name.clone();
+
+        subscriber_tasks.spawn(async move {
+            let mut service = StompService::new(config_clone).await?;
+            service
+                .receive_queue(&queue_name_clone, create_queue_handler(&queue_name_clone))
+                .await
+        });
     }
 
-    // Add topic subscribers
-    for (topic_name, worker_count) in config.get_all_topic_workers() {
+    // Start subscribers for each topic (workers will be managed internally by service)
+    for topic_name in topic_names {
+        let worker_count = config.get_topic_workers(&topic_name);
         info!(
             "📊 Topic '{}' configured with {} workers",
             topic_name, worker_count
         );
-        for worker_id in 0..worker_count {
-            let subscriber_id = format!("{}#{}", topic_name, worker_id + 1);
-            subscribers_to_spawn.push((topic_name.clone(), subscriber_id, SubscriberType::Topic));
-        }
-    }
 
-    info!(
-        "🔧 Spawning {} total subscribers...",
-        subscribers_to_spawn.len()
-    );
-
-    // Spawn all subscriber tasks
-    for (dest_name, subscriber_id, sub_type) in subscribers_to_spawn {
         let config_clone = config.clone();
-        let shutdown_rx = shutdown_tx.subscribe();
+        let _shutdown_rx = shutdown_tx.subscribe();
+        let topic_name_clone = topic_name.clone();
 
-        subscriber_tasks.spawn(run_subscriber(
-            dest_name,
-            subscriber_id,
-            sub_type,
-            config_clone,
-            shutdown_rx,
-        ));
+        subscriber_tasks.spawn(async move {
+            let mut service = StompService::new(config_clone).await?;
+            service
+                .receive_topic(&topic_name_clone, create_topic_handler(&topic_name_clone))
+                .await
+        });
     }
 
     // Wait a bit before starting message sending
@@ -435,9 +343,4 @@ async fn setup_signal_handlers() {
 /// Request application shutdown
 fn request_shutdown() {
     SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
-}
-
-/// Check if shutdown has been requested
-fn is_shutdown_requested() -> bool {
-    SHUTDOWN_REQUESTED.load(Ordering::Relaxed)
 }

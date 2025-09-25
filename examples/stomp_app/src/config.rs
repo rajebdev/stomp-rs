@@ -47,7 +47,8 @@ pub struct HeartbeatConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RetryConfig {
-    pub max_attempts: u32,
+    /// Maximum number of retry attempts. -1 means infinite retries.
+    pub max_attempts: i32,
     pub initial_delay_ms: u64,
     pub max_delay_ms: u64,
     pub backoff_multiplier: f64,
@@ -92,27 +93,49 @@ impl RetryConfig {
             return Duration::from_millis(self.initial_delay_ms);
         }
 
-        let delay_ms = (self.initial_delay_ms as f64) * self.backoff_multiplier.powi(attempt as i32);
+        let delay_ms =
+            (self.initial_delay_ms as f64) * self.backoff_multiplier.powi(attempt as i32);
         let capped_delay_ms = delay_ms.min(self.max_delay_ms as f64) as u64;
-        
+
         Duration::from_millis(capped_delay_ms)
     }
 
     /// Check if we should retry based on the current attempt number
     pub fn should_retry(&self, attempt: u32) -> bool {
-        attempt < self.max_attempts
+        if self.max_attempts < 0 {
+            true // Infinite retries when negative
+        } else {
+            attempt < (self.max_attempts as u32)
+        }
     }
 
     /// Get the next retry attempt number (0-indexed)
     pub fn next_attempt(&self, current_attempt: u32) -> u32 {
         current_attempt + 1
     }
+
+    /// Check if infinite retries are enabled
+    pub fn is_infinite_retries(&self) -> bool {
+        self.max_attempts < 0
+    }
+
+    /// Create a RetryConfig with finite retry attempts
+    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = max_attempts as i32;
+        self
+    }
+
+    /// Create a RetryConfig with infinite retry attempts
+    pub fn with_infinite_retries(mut self) -> Self {
+        self.max_attempts = -1;
+        self
+    }
 }
 
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_attempts: 5,
+            max_attempts: -1, // Infinite retries by default
             initial_delay_ms: 1000,
             max_delay_ms: 30000,
             backoff_multiplier: 2.0,
@@ -197,6 +220,16 @@ impl Config {
             .keys()
             .map(|name| (name.clone(), self.get_topic_workers(name)))
             .collect()
+    }
+
+    /// Get all configured queue names
+    pub fn get_all_queue_names(&self) -> Vec<String> {
+        self.destinations.queues.keys().cloned().collect()
+    }
+
+    /// Get all configured topic names
+    pub fn get_all_topic_names(&self) -> Vec<String> {
+        self.destinations.topics.keys().cloned().collect()
     }
 }
 
@@ -291,13 +324,19 @@ retry:
     #[test]
     fn test_retry_config_default() {
         let retry_config = RetryConfig::default();
-        assert_eq!(retry_config.max_attempts, 5);
+        assert_eq!(retry_config.max_attempts, -1); // Default is now infinite retries (-1)
         assert_eq!(retry_config.initial_delay_ms, 1000);
         assert_eq!(retry_config.max_delay_ms, 30000);
         assert_eq!(retry_config.backoff_multiplier, 2.0);
-        
+
         // Test delay capping
         let large_delay = retry_config.calculate_delay(10); // Should be capped at max_delay_ms
         assert_eq!(large_delay.as_millis(), 30000);
+
+        // Test infinite retry logic
+        assert!(retry_config.should_retry(0));
+        assert!(retry_config.should_retry(100));
+        assert!(retry_config.should_retry(1000000)); // Should always retry with infinite retries
+        assert!(retry_config.is_infinite_retries()); // Should return true for -1
     }
 }
