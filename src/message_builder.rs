@@ -1,6 +1,6 @@
-use session::{Session, ReceiptRequest, OutstandingReceipt};
-use frame::Frame;
-use option_setter::OptionSetter;
+use crate::session::{Session, ReceiptRequest, OutstandingReceipt};
+use crate::frame::Frame;
+use crate::option_setter::OptionSetter;
 
 pub struct MessageBuilder<'a> {
     pub session: &'a mut Session,
@@ -18,7 +18,7 @@ impl<'a> MessageBuilder<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn send(self) {
+    pub async fn send(self) -> std::io::Result<()> {
         if self.receipt_request.is_some() {
             let request = self.receipt_request.unwrap();
             self.session.state.outstanding_receipts.insert(
@@ -28,7 +28,7 @@ impl<'a> MessageBuilder<'a> {
                 )
             );
         }
-        self.session.send_frame(self.frame)
+        self.session.send_frame(self.frame).await
     }
 
     #[allow(dead_code)]

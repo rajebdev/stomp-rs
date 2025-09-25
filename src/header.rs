@@ -139,7 +139,7 @@ impl HeaderList {
     pub fn get_accept_version(&self) -> Option<Vec<StompVersion>> {
         let versions: &str = match self.get_header("accept-version") {
             Some(h) => h.get_value(),
-            None => return None,
+            _ => return None,
         };
         let versions: Vec<StompVersion> = versions.split(',')
                                                   .filter_map(|v| {
@@ -157,21 +157,21 @@ impl HeaderList {
     pub fn get_ack<'a>(&'a self) -> Option<Ack<'a>> {
         match self.get_header("ack") {
             Some(h) => Some(Ack(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_destination<'a>(&'a self) -> Option<Destination<'a>> {
         match self.get_header("destination") {
             Some(h) => Some(Destination(h.get_value())),
-            None => return None,
+            _ => return None,
         }
     }
 
     pub fn get_heart_beat(&self) -> Option<HeartBeat> {
         let spec = match self.get_header("heart-beat") {
             Some(h) => h.get_value(),
-            None => return None,
+            _ => return None,
         };
         let spec_list: Vec<u32> = spec.split(',')
                                       .filter_map(|str_val| str_val.parse::<u32>().ok())
@@ -186,84 +186,84 @@ impl HeaderList {
     pub fn get_host<'a>(&'a self) -> Option<Host<'a>> {
         match self.get_header("host") {
             Some(h) => Some(Host(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_id<'a>(&'a self) -> Option<Id<'a>> {
         match self.get_header("id") {
             Some(h) => Some(Id(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_login<'a>(&'a self) -> Option<Login<'a>> {
         match self.get_header("login") {
             Some(h) => Some(Login(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_message_id<'a>(&'a self) -> Option<MessageId<'a>> {
         match self.get_header("message-id") {
             Some(h) => Some(MessageId(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_passcode<'a>(&'a self) -> Option<Passcode<'a>> {
         match self.get_header("passcode") {
             Some(h) => Some(Passcode(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_receipt<'a>(&'a self) -> Option<Receipt<'a>> {
         match self.get_header("receipt") {
             Some(h) => Some(Receipt(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_receipt_id<'a>(&'a self) -> Option<ReceiptId<'a>> {
         match self.get_header("receipt-id") {
             Some(h) => Some(ReceiptId(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_server<'a>(&'a self) -> Option<Server<'a>> {
         match self.get_header("server") {
             Some(h) => Some(Server(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_session<'a>(&'a self) -> Option<Session<'a>> {
         match self.get_header("session") {
             Some(h) => Some(Session(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_subscription<'a>(&'a self) -> Option<Subscription<'a>> {
         match self.get_header("subscription") {
             Some(h) => Some(Subscription(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_transaction<'a>(&'a self) -> Option<Transaction<'a>> {
         match self.get_header("transaction") {
             Some(h) => Some(Transaction(h.get_value())),
-            None => None,
+            _ => None,
         }
     }
 
     pub fn get_version(&self) -> Option<Version> {
         let version = match self.get_header("version") {
             Some(h) => h.get_value(),
-            None => return None,
+            _ => return None,
         };
         match (version).as_ref() {
             "1.0" => Some(Version(StompVersion::Stomp_v1_0)), // TODO: Impl FromStr for StompVersion
@@ -276,11 +276,11 @@ impl HeaderList {
     pub fn get_content_length(&self) -> Option<ContentLength> {
         let length = match self.get_header("content-length") {
             Some(h) => h.get_value(),
-            None => return None,
+            _ => return None,
         };
         match length.parse::<u32>().ok() {
             Some(l) => Some(ContentLength(l)),
-            None => None,
+            _ => None,
         }
     }
 }

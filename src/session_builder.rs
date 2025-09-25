@@ -1,12 +1,10 @@
-use option_setter::OptionSetter;
-use connection::{HeartBeat, OwnedCredentials};
-use header::{HeaderList, Header};
+use crate::option_setter::OptionSetter;
+use crate::connection::{HeartBeat, OwnedCredentials};
+use crate::header::{HeaderList, Header};
+use crate::session::Session;
+use crate::header_list;
 
-use std::net::ToSocketAddrs;
-use session::{Session};
 use std::io;
-use tokio_core::reactor::Handle;
-use tokio_core::net::TcpStream;
 
 #[derive(Clone)]
 pub struct SessionConfig {
@@ -42,11 +40,8 @@ impl SessionBuilder {
     }
 
     #[allow(dead_code)]
-    pub fn start<'b, 'c>(self, hdl: Handle) -> ::std::io::Result<Session> {
-        let address = (&self.config.host as &str, self.config.port)
-            .to_socket_addrs()?.nth(0)
-            .ok_or(io::Error::new(io::ErrorKind::Other, "address provided resolved to nothing"))?;
-        Ok(Session::new(self.config, TcpStream::connect(&address, &hdl), hdl))
+    pub async fn start(self) -> io::Result<Session> {
+        Session::new(self.config).await
     }
 
     #[allow(dead_code)]

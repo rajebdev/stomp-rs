@@ -1,8 +1,7 @@
-use frame::Frame;
-use frame::ToFrameBody;
-use message_builder::MessageBuilder;
-use header::Header;
-use session::{Session};
+use crate::frame::{Frame, ToFrameBody};
+use crate::message_builder::MessageBuilder;
+use crate::header::Header;
+use crate::session::Session;
 
 pub struct Transaction<'tx> {
     pub id: String,
@@ -29,18 +28,18 @@ impl<'tx> Transaction<'tx> {
 
     // TODO: See if it's feasible to do this via command_sender
 
-    pub fn begin(&mut self) {
-        let begin_frame = Frame::begin(self.id.as_ref());
-        self.session.send_frame(begin_frame)
+    pub async fn begin(&mut self) -> std::io::Result<()> {
+        let begin_frame = Frame::begin(&self.id.to_string());
+        self.session.send_frame(begin_frame).await
     }
 
-    pub fn commit(self) {
-        let commit_frame = Frame::commit(self.id.as_ref());
-        self.session.send_frame(commit_frame)
+    pub async fn commit(self) -> std::io::Result<()> {
+        let commit_frame = Frame::commit(&self.id.to_string());
+        self.session.send_frame(commit_frame).await
     }
 
-    pub fn abort(self) {
-        let abort_frame = Frame::abort(self.id.as_ref());
-        self.session.send_frame(abort_frame)
+    pub async fn abort(self) -> std::io::Result<()> {
+        let abort_frame = Frame::abort(&self.id.to_string());
+        self.session.send_frame(abort_frame).await
     }
 }

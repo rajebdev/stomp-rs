@@ -1,8 +1,8 @@
-use session::{Session, ReceiptRequest, OutstandingReceipt};
-use subscription::{Subscription, AckMode};
-use frame::Frame;
-use header::HeaderList;
-use option_setter::OptionSetter;
+use crate::session::{Session, ReceiptRequest, OutstandingReceipt};
+use crate::subscription::{Subscription, AckMode};
+use crate::frame::Frame;
+use crate::header::HeaderList;
+use crate::option_setter::OptionSetter;
 
 pub struct SubscriptionBuilder<'a> {
     pub session: &'a mut Session,
@@ -25,7 +25,7 @@ impl<'a> SubscriptionBuilder<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn start(mut self) -> String {
+    pub async fn start(mut self) -> Result<String, std::io::Error> {
         let next_id = self.session.generate_subscription_id();
         let subscription = Subscription::new(next_id,
                                              &self.destination,
@@ -37,10 +37,10 @@ impl<'a> SubscriptionBuilder<'a> {
 
         subscribe_frame.headers.concat(&mut self.headers);
 
-        self.session.send_frame(subscribe_frame.clone());
+        self.session.send_frame(subscribe_frame.clone()).await?;
 
-        debug!("Registering callback for subscription id '{}' from builder",
-               subscription.id);
+        log::debug!("Registering callback for subscription id '{}' from builder",
+                    subscription.id);
         let id_to_return = subscription.id.to_string();
         self.session.state.subscriptions.insert(subscription.id.to_string(), subscription);
         if self.receipt_request.is_some() {
@@ -52,7 +52,7 @@ impl<'a> SubscriptionBuilder<'a> {
                 )
             );
         }
-        id_to_return
+        Ok(id_to_return)
     }
 
     #[allow(dead_code)]

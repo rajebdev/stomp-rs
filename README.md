@@ -1,158 +1,232 @@
-stomp-rs [![](https://api.travis-ci.org/zslayton/stomp-rs.png?branch=master)](https://travis-ci.org/zslayton/stomp-rs) [![](http://meritbadge.herokuapp.com/stomp)](https://crates.io/crates/stomp)
-=====
+# stomp-rs
 
-`stomp-rs` provides a full [STOMP](http://stomp.github.io/stomp-specification-1.2.html) 1.2 client implementation for the [Rust programming language](http://www.rust-lang.org/). This allows programs written in Rust to interact with message queueing services like [ActiveMQ](http://activemq.apache.org/), [RabbitMQ](http://www.rabbitmq.com/), [HornetQ](http://hornetq.jboss.org/) and [OpenMQ](https://mq.java.net/).
+A modern Rust implementation of the [STOMP 1.2 protocol](http://stomp.github.io/stomp-specification-1.2.html) with full async/await support.
 
-- [x] Connect
-- [x] Subscribe
-- [x] Send
-- [x] Acknowledge (Auto/Client/ClientIndividual)
-- [x] Transactions
-- [x] Receipts
-- [x] Disconnect
-- [x] Heartbeats
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org)
+[![Edition](https://img.shields.io/badge/edition-2021-blue.svg)](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
 
-The APIs for `stomp-rs` are not yet stable and are likely to fluctuate before v1.0.
+This library allows Rust programs to interact with message queueing services like [ActiveMQ](http://activemq.apache.org/) and [RabbitMQ](https://www.rabbitmq.com/) using the STOMP protocol.
 
-## Examples
-### Connect / Subscribe / Send
+## Features
+
+- ✅ Full STOMP 1.2 protocol support
+- ✅ Modern async/await API with tokio 1.x
+- ✅ Connection management and heartbeats
+- ✅ Message publishing and subscription
+- ✅ Transaction support
+- ✅ Receipt handling
+- ✅ Custom headers and message properties
+- ✅ Comprehensive error handling
+
+## Requirements
+
+- **Rust 1.70.0 or later**
+- **Edition 2021**
+- **tokio runtime** (async environment)
+
+## Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+stomp = "0.13"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"  # for Stream processing
+```
+
+## Quick Start
+
+Here's a simple example showing how to connect, subscribe, and send messages:
+
 ```rust
-extern crate stomp;
-use stomp::frame::Frame;
-use stomp::subscription::AckOrNack::Ack;
+use stomp::session_builder::SessionBuilder;
+use stomp::session::SessionEvent;
+use stomp::subscription::AckOrNack;
 
-fn main() {
-  
-  let destination = "/topic/messages";
-  let mut message_count: u64 = 0;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create and start a session
+    let mut session = SessionBuilder::new("127.0.0.1", 61613)
+        .start()
+        .await?;
 
-  let mut session = match stomp::session("127.0.0.1", 61613).start() {
-      Ok(session) => session,
-      Err(error)  => panic!("Could not connect to the server: {}", error)
-   };
-  
-  session.subscription(destination, |frame: &Frame| {
-    message_count += 1;
-    println!("Received message #{}:\n{}", message_count, frame);
-    Ack
-  }).start();
-  
-  session.message(destination, "Animal").send();
-  session.message(destination, "Vegetable").send();
-  session.message(destination, "Mineral").send();
-  
-  session.listen(); // Loops infinitely, awaiting messages
+    // Wait for connection
+    while let Some(event) = session.next_event().await {
+        match event {
+            SessionEvent::Connected => {
+                println!("Connected to STOMP server!");
+                break;
+            }
+            SessionEvent::ErrorFrame(frame) => {
+                eprintln!("Connection error: {:?}", frame);
+                return Err("Connection failed".into());
+            }
+            _ => continue,
+        }
+    }
 
-  session.disconnect();
+    // Subscribe to a destination
+    let subscription_id = session
+        .subscription("/queue/test")
+        .start()
+        .await?;
+
+    println!("Subscribed with ID: {}", subscription_id);
+
+    // Send a message
+    session
+        .message("/queue/test", "Hello, STOMP!")
+        .send()
+        .await?;
+
+    // Process incoming messages
+    while let Some(event) = session.next_event().await {
+        match event {
+            SessionEvent::Message { frame, .. } => {
+                let body = std::str::from_utf8(&frame.body)?;
+                println!("Received: {}", body);
+                
+                // Acknowledge the message
+                session.acknowledge_frame(&frame, AckOrNack::Ack).await?;
+                break;
+            }
+            SessionEvent::ErrorFrame(frame) => {
+                eprintln!("Error: {:?}", frame);
+                break;
+            }
+            SessionEvent::Disconnected(reason) => {
+                println!("Disconnected: {:?}", reason);
+                break;
+            }
+            _ => continue,
+        }
+    }
+
+    // Disconnect gracefully
+    session.disconnect().await?;
+    Ok(())
 }
 ```
 
-### Session Configuration
+## Advanced Usage
+
+### Connection Configuration
+
 ```rust
-use stomp::header::header::Header;
+use stomp::session_builder::SessionBuilder;
 use stomp::connection::{HeartBeat, Credentials};
-// ...
-let mut session = match stomp::session("127.0.0.1", 61613)
-  .with(Credentials("sullivan", "m1k4d0"))
-  .with(HeartBeat(5000, 2000))
-  .with(Header::new("custom-client-id", "hmspna4"))
-  .start() {
-      Ok(session) => session,
-      Err(error)  => panic!("Could not connect to the server: {}", error)
-   };
-```
-
-### Message Configuration
-```rust
-use stomp::header::{Header, SuppressedHeader, ContentType};
-// ...
-session.message(destination, "Hypoteneuse".as_bytes())
-  .with(ContentType("text/plain"))
-  .with(Header::new("persistent", "true"))
-  .with(SuppressedHeader("content-length")
-  .send();
-```
-
-### Subscription Configuration
-```rust
-use stomp::subscription::AckMode;
 use stomp::header::Header;
-use stomp::frame::Frame;
-// ...
-  let id = session.subscription(destination, |frame: &Frame| {
-    message_count += 1;
-    println!("Received message #{}:\n{}", message_count, frame);
-    Ack
-  })
-  .with(AckMode::Client)
-  .with(Header::new("custom-subscription-header", "lozenge"))
-  .start();
+
+let mut session = SessionBuilder::new("localhost", 61613)
+    // Add credentials
+    .with(Credentials("username", "password"))
+    // Set heartbeat (tx_ms, rx_ms)
+    .with(HeartBeat(30000, 30000))
+    // Add custom headers
+    .with(Header::new("custom-header", "value"))
+    .start()
+    .await?;
 ```
 
-### Transactions
+### Transaction Support
+
 ```rust
-match session.begin_transaction() {
-  Ok(mut transaction) => {
-    transaction.message(destination, "Animal").send();
-    transaction.message(destination, "Vegetable").send();
-    transaction.message(destination, "Mineral").send();
-    transaction.commit();
-},
-  Err(error)  => panic!("Could not connect to the server: {}", error)
-};
+// Begin a transaction
+let mut transaction = session.begin_transaction();
+transaction.begin().await?;
+
+// Send messages within transaction
+session.message("/queue/test", "msg1").send().await?;
+session.message("/queue/test", "msg2").send().await?;
+
+// Commit the transaction
+transaction.commit().await?;
 ```
 
-### Handling RECEIPT frames
-If you include a ReceiptHandler in your message, the client will request that the server send a receipt when it has successfully processed the frame.
+### Message Properties and Headers
+
 ```rust
-session.message(destination, "text/plain", "Hypoteneuse".as_bytes())
-  .with(ReceiptHandler::new(|frame: &Frame| println!("Got a receipt for 'Hypoteneuse'.")))
-  .send();
+use stomp::header::Header;
+
+// Send message with custom headers
+session
+    .message("/queue/test", "Hello")
+    .with(Header::new("priority", "high"))
+    .with(Header::new("content-type", "text/plain"))
+    .send()
+    .await?;
 ```
-### Handling ERROR frames
-To handle errors, you can register an error handler
+
+### Stream-based Event Processing
+
 ```rust
-session.on_error(|frame: &Frame| {
-  panic!("ERROR frame received:\n{}", frame);
-});
+use futures::StreamExt;
+
+// Process events using Stream trait
+let mut event_stream = session;
+while let Some(event) = event_stream.next_event().await {
+    match event {
+        SessionEvent::Message { destination, frame, ack_mode } => {
+            println!("Message from {}: {:?}", destination, frame.body);
+            session.acknowledge_frame(&frame, AckOrNack::Ack).await?;
+        }
+        SessionEvent::Receipt { id, original, receipt } => {
+            println!("Receipt {} received", id);
+        }
+        SessionEvent::ErrorFrame(frame) => {
+            eprintln!("Server error: {:?}", frame);
+        }
+        SessionEvent::Disconnected(reason) => {
+            println!("Connection lost: {:?}", reason);
+            break;
+        }
+        _ => {}
+    }
+}
 ```
 
-### Manipulating inbound and outbound frames
-In some cases, brokers impose rules or restrictions which may make it necessary to
-directly modify frames in ways that are not conveniently exposed by the API. In such 
-cases, you can use the `on_before_send` and `on_before_receive` methods to specify a
-callback to perform this custom logic prior to the sending or receipt of each frame.
+## Message Brokers Compatibility
 
-For example:
-```rust
-// Require that all NACKs include a header specifying an optional requeue policy
-session.on_before_send(|frame: &mut Frame| {
-  if frame.command == "NACK" {
-    frame.headers.push(Header::new("requeue", "false"));
-  }
-});
+This library has been tested with:
 
-session.on_before_receive(|frame: &mut Frame| {
-  if frame.command == "MESSAGE" {
-    // Modify the frame
-  }
-});
-```
-### Cargo.toml
-```toml
-[package]
+- **Apache ActiveMQ** 5.x and newer
+- **RabbitMQ** with STOMP plugin
+- **Apache Artemis**
+- Other STOMP 1.2 compliant brokers
 
-name = "stomp_test"
-version = "0.0.1"
-authors = ["your_name_here"]
+## Migration from 0.12.x
 
-[[bin]]
+This is a major breaking release. See [CHANGELOG.md](CHANGELOG.md) for a detailed migration guide.
 
-name = "stomp_test"
+Key changes:
+- All I/O operations are now `async` and require `.await`
+- Updated to modern tokio 1.x and futures 0.3
+- Rust 2021 edition and modern dependency versions
+- Improved error handling and type safety
 
-[dependencies.stomp]
+## Examples
 
-stomp = "*"
+See the [examples](examples/) directory for complete working examples:
+
+- [send_and_subscribe](examples/send_and_subscribe/) - Basic usage with async/await
+
+Run an example:
+```bash
+# Start a STOMP broker (e.g., ActiveMQ on localhost:61613)
+cargo run --example send_and_subscribe
 ```
 
-keywords: `Stomp`, `Rust`, `rust-lang`, `rustlang`, `cargo`, `ActiveMQ`, `RabbitMQ`, `HornetQ`, `OpenMQ`, `Message Queue`, `MQ`
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- Original stomp-rs implementation by Zack Slayton
+- STOMP protocol specification: http://stomp.github.io/
+- Built with modern Rust async ecosystem (tokio, futures, bytes, nom)

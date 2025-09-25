@@ -6,16 +6,18 @@ license = "MIT"
 name = "stomp"
 readme = "README.md"
 repository = "https://github.com/zslayton/stomp-rs"
-version = "0.12.0"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.70.0"
 
 [dependencies]
-bytes = "0.4"
-futures = "0.1"
-log = "0.3"
-nom = "3.2"
-tokio-core = "0.1"
-tokio-io = "0.1"
-unicode-segmentation = "0.1"
+bytes = "1.5"
+futures = "0.3"
+log = "0.4"
+nom = "7.1"
+tokio = { version = "1.32", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+unicode-segmentation = "1.10"
 
 [lib]
 name = "stomp"

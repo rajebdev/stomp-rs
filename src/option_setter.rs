@@ -1,13 +1,13 @@
-use message_builder::MessageBuilder;
-use session_builder::SessionBuilder;
-use subscription_builder::SubscriptionBuilder;
-use header::{Header, SuppressedHeader, ContentType};
-use connection::{HeartBeat, Credentials, OwnedCredentials};
-use subscription::AckMode;
-use session::{ReceiptRequest, GenerateReceipt};
+use crate::message_builder::MessageBuilder;
+use crate::session_builder::SessionBuilder;
+use crate::subscription_builder::SubscriptionBuilder;
+use crate::header::{Header, SuppressedHeader, ContentType};
+use crate::connection::{HeartBeat, Credentials, OwnedCredentials};
+use crate::subscription::AckMode;
+use crate::session::{ReceiptRequest, GenerateReceipt};
 
 pub trait OptionSetter<T> {
-    fn set_option(self, T) -> T;
+    fn set_option(self, target: T) -> T;
 }
 
 impl <'a> OptionSetter<MessageBuilder<'a>> for Header {

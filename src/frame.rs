@@ -1,10 +1,9 @@
-use header::HeaderList;
-use header::Header;
-use subscription::AckMode;
+use crate::header::{HeaderList, Header};
+use crate::subscription::AckMode;
+use crate::header_list;
 use std::str::from_utf8;
-use std::fmt;
-use std::fmt::Formatter;
-use bytes::BytesMut;
+use std::fmt::{self, Formatter};
+use bytes::{BytesMut};
 
 #[derive(Copy, Clone, Debug)]
 pub enum Command {
@@ -91,7 +90,7 @@ pub enum Transmission {
 impl Transmission {
     pub fn write(&self, out: &mut BytesMut) {
         match *self {
-            Transmission::HeartBeat => out.extend("\n".as_bytes()),
+            Transmission::HeartBeat => out.extend_from_slice("\n".as_bytes()),
             Transmission::CompleteFrame(ref frame) => frame.write(out),
         }
     }
@@ -135,20 +134,20 @@ impl Frame {
     }
 
     pub fn write(&self, out: &mut BytesMut) {
-        debug!("Sending frame:\n{}", self.to_str());
-        out.extend(self.command.as_str().as_bytes());
-        out.extend("\n".as_bytes());
+        log::debug!("Sending frame:\n{}", self.to_str());
+        out.extend_from_slice(self.command.as_str().as_bytes());
+        out.extend_from_slice("\n".as_bytes());
 
         for header in self.headers.iter() {
-            out.extend(header.get_raw().as_bytes());
-            out.extend("\n".as_bytes());
+            out.extend_from_slice(header.get_raw().as_bytes());
+            out.extend_from_slice("\n".as_bytes());
         }
 
-        out.extend("\n".as_bytes());
-        out.extend(&self.body);
+        out.extend_from_slice("\n".as_bytes());
+        out.extend_from_slice(&self.body);
 
-        out.extend(&[0]);
-        debug!("write() complete.");
+        out.extend_from_slice(&[0]);
+        log::debug!("write() complete.");
     }
 
     pub fn connect(tx_heartbeat_ms: u32, rx_heartbeat_ms: u32) -> Frame {
