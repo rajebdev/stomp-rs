@@ -1,0 +1,111 @@
+# STOMP Service Boilerplate Configuration
+#
+# This configuration file demonstrates all available options for the STOMP service.
+# All values can be overridden with environment variables using the pattern:
+# STOMP_SECTION_FIELD (e.g., STOMP_BROKER_HOST=activemq.company.com)
+
+# Service metadata
+service:
+  name: "stomp-service"
+  version: "1.0.0"
+  description: "Production STOMP messaging service"
+
+# STOMP broker connection settings
+broker:
+  # Broker connection details
+  host: "10.0.7.127"  # Override with: STOMP_BROKER_HOST
+  port: 31333        # Override with: STOMP_BROKER_PORT
+  
+  # Authentication (optional) - matching reference implementation
+  credentials:
+    username: "sullivan"     # Override with: STOMP_BROKER_USERNAME
+    password: "m1k4d0"       # Override with: STOMP_BROKER_PASSWORD
+  
+  # Connection heartbeat settings (matching reference: 5000ms send, 2000ms receive)
+  heartbeat:
+    client_send_secs: 30         # Heartbeat interval for client->server (converted to ms internally)
+    client_receive_secs: 30      # Expected heartbeat interval from server (converted to ms internally)
+  
+  # Connection retry settings
+  retry:
+    max_attempts: 5
+    initial_delay_secs: 1
+    max_delay_secs: 60
+    backoff_multiplier: 2.0
+  
+  # Custom headers to send with CONNECT frame
+  headers: {}
+
+# Message destinations configuration
+destinations:
+  # Queue configurations
+  queues:
+    # Default demo queue
+    default:
+      path: "/queue/demo"
+      headers: {}
+    
+    # Test queue matching reference implementation
+    modern_major_general_0:
+      path: "/queue/modern_major_general_0"
+      headers: {}
+    
+    # API requests queue
+    api_requests:
+      path: "/queue/api.requests"
+      headers:
+        persistent: "true"
+    
+    # Error handling queue
+    errors:
+      path: "/queue/errors"
+      headers:
+        persistent: "true"
+        priority: "high"
+  
+  # Topic configurations
+  topics:
+    # Notification events topic
+    notifications:
+      path: "/topic/notifications"
+      headers: {}
+    
+    # System events topic
+    events:
+      path: "/topic/events"  
+      headers:
+        persistent: "false"
+
+# Consumer settings
+consumers:
+  # Acknowledgment mode - always use client_individual for precise control
+  ack_mode: "client_individual"
+  
+  # Number of worker threads per queue (topics always get 1 worker)
+  workers_per_queue:
+    default: 2         # 2 workers for default queue
+    api_requests: 4    # 4 workers for high-volume API requests
+    errors: 1          # 1 worker for error queue
+  
+  # Message processing retry configuration
+  retry:
+    max_attempts: 3
+    initial_delay_secs: 1
+    max_delay_secs: 30
+    backoff_multiplier: 2.0
+
+# Logging configuration  
+logging:
+  # Log level: trace, debug, info, warn, error
+  level: "info"  # Override with: STOMP_LOGGING_LEVEL
+  
+  # Output destination: stdout, stderr, or file path
+  output: "stdout"  # Override with: STOMP_LOGGING_OUTPUT
+
+# Graceful shutdown settings
+shutdown:
+  # Maximum time to wait for graceful shutdown
+  timeout_secs: 5  # Override with: STOMP_SHUTDOWN_TIMEOUT_SECS
+  
+  # Time to wait for in-flight messages to complete
+  grace_period_secs: 5  # Override with: STOMP_SHUTDOWN_GRACE_PERIOD_SECS
