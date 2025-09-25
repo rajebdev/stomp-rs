@@ -26,7 +26,7 @@ enum SubscriberType {
     Topic,
 }
 
-/// Run a single subscriber instance
+/// Run a single subscriber instance with auto-reconnection
 async fn run_subscriber(
     dest_name: String,
     subscriber_id: String,
@@ -36,10 +36,10 @@ async fn run_subscriber(
 ) -> Result<()> {
     let log_prefix = format!("[{}][{}]", dest_name, subscriber_id);
 
-    info!("{} Starting subscriber...", log_prefix);
+    info!("{} Starting subscriber with auto-reconnection...", log_prefix);
 
     // Create dedicated STOMP service for this subscriber
-    let mut service = match StompService::new(config).await {
+    let mut service = match StompService::new(config.clone()).await {
         Ok(service) => service,
         Err(e) => {
             error!("{} Failed to create STOMP service: {}", log_prefix, e);
@@ -47,87 +47,141 @@ async fn run_subscriber(
         }
     };
 
-    // Define the message handler with proper logging prefix
-    let handler = {
-        let log_prefix = log_prefix.clone();
-        let subscriber_type = subscriber_type.clone();
-
-        move |msg: String| {
-            let log_prefix = log_prefix.clone();
-            let subscriber_type = subscriber_type.clone();
-
-            Box::pin(async move {
-                let start_time = std::time::Instant::now();
-
-                info!(
-                    "{} Processing {} message: {}",
-                    log_prefix,
-                    match subscriber_type {
-                        SubscriberType::Queue => "queue",
-                        SubscriberType::Topic => "topic",
-                    },
-                    msg.chars().take(50).collect::<String>()
-                );
-
-                // Call appropriate handler based on type
-                let result = match subscriber_type {
-                    SubscriberType::Queue => MessageHandlers::queue_handler(msg).await,
-                    SubscriberType::Topic => MessageHandlers::topic_handler(msg).await,
-                };
-
-                let processing_time = start_time.elapsed();
-                match result {
-                    Ok(()) => {
-                        info!(
-                            "{} ✅ Message processed successfully in {}ms",
-                            log_prefix,
-                            processing_time.as_millis()
-                        );
-                    }
-                    Err(e) => {
-                        error!("{} ❌ Message processing failed: {}", log_prefix, e);
-                        return Err(e);
-                    }
-                }
-
-                Ok(())
-            }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+    // Main subscriber loop with reconnection handling
+    loop {
+        // Check for shutdown signal first
+        if let Ok(_) = shutdown_rx.try_recv() {
+            info!("{} Received shutdown signal, stopping subscriber...", log_prefix);
+            break;
         }
-    };
 
-    // Start the appropriate subscription in a select loop with shutdown signal
-    let receive_future = async {
-        match subscriber_type {
-            SubscriberType::Queue => {
-                info!("{} 📥 Starting queue subscription...", log_prefix);
-                service.receive_queue(&dest_name, handler).await
-            }
-            SubscriberType::Topic => {
-                info!("{} 📥 Starting topic subscription...", log_prefix);
-                service.receive_topic(&dest_name, handler).await
-            }
-        }
-    };
-
-    // Wait for either the receive future to complete or shutdown signal
-    tokio::select! {
-        result = receive_future => {
-            match result {
-                Ok(_) => {
-                    info!("{} Subscription completed normally", log_prefix);
+        // Ensure we're connected before attempting to subscribe
+        if !service.is_healthy() {
+            info!("{} Connection unhealthy, attempting reconnection...", log_prefix);
+            match service.reconnect().await {
+                Ok(()) => {
+                    info!("{} Reconnection successful, resuming subscription", log_prefix);
                 }
                 Err(e) => {
                     if is_shutdown_requested() {
-                        info!("{} Subscription stopped due to shutdown", log_prefix);
-                    } else {
-                        error!("{} Subscription error: {}", log_prefix, e);
-                        return Err(e);
+                        info!("{} Shutdown requested during reconnection, exiting", log_prefix);
+                        break;
                     }
+                    error!("{} Reconnection failed permanently: {}", log_prefix, e);
+                    return Err(e);
                 }
             }
         }
-        _ = shutdown_rx.recv() => {
-            info!("{} Received shutdown signal, stopping subscription...", log_prefix);
+
+        // Define the message handler with proper logging prefix
+        let handler = {
+            let log_prefix = log_prefix.clone();
+            let subscriber_type = subscriber_type.clone();
+
+            move |msg: String| {
+                let log_prefix = log_prefix.clone();
+                let subscriber_type = subscriber_type.clone();
+
+                Box::pin(async move {
+                    let start_time = std::time::Instant::now();
+
+                    info!(
+                        "{} Processing {} message: {}",
+                        log_prefix,
+                        match subscriber_type {
+                            SubscriberType::Queue => "queue",
+                            SubscriberType::Topic => "topic",
+                        },
+                        msg.chars().take(50).collect::<String>()
+                    );
+
+                    // Call appropriate handler based on type
+                    let result = match subscriber_type {
+                        SubscriberType::Queue => MessageHandlers::queue_handler(msg).await,
+                        SubscriberType::Topic => MessageHandlers::topic_handler(msg).await,
+                    };
+
+                    let processing_time = start_time.elapsed();
+                    match result {
+                        Ok(()) => {
+                            info!(
+                                "{} ✅ Message processed successfully in {}ms",
+                                log_prefix,
+                                processing_time.as_millis()
+                            );
+                        }
+                        Err(e) => {
+                            error!("{} ❌ Message processing failed: {}", log_prefix, e);
+                            return Err(e);
+                        }
+                    }
+
+                    Ok(())
+                }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+            }
+        };
+
+        // Attempt to start the appropriate subscription with error handling
+        let receive_future = async {
+            match subscriber_type {
+                SubscriberType::Queue => {
+                    info!("{} 📥 Starting queue subscription...", log_prefix);
+                    service.receive_queue(&dest_name, handler).await
+                }
+                SubscriberType::Topic => {
+                    info!("{} 📥 Starting topic subscription...", log_prefix);
+                    service.receive_topic(&dest_name, handler).await
+                }
+            }
+        };
+
+        // Wait for either the receive future to complete or shutdown signal
+        let subscription_result = tokio::select! {
+            result = receive_future => result,
+            _ = shutdown_rx.recv() => {
+                info!("{} Received shutdown signal during subscription", log_prefix);
+                break;
+            }
+        };
+
+        // Handle subscription results
+        match subscription_result {
+            Ok(_) => {
+                info!("{} Subscription completed normally, checking connection health...", log_prefix);
+                // If subscription ended normally, check if it was due to connection issues
+                if !service.is_healthy() {
+                    warn!("{} Subscription ended due to connection loss, will attempt reconnection", log_prefix);
+                    // Continue the loop to attempt reconnection
+                    sleep(Duration::from_millis(1000)).await; // Brief pause before next iteration
+                    continue;
+                }
+                // If healthy disconnection, break the loop
+                break;
+            }
+            Err(e) => {
+                if is_shutdown_requested() {
+                    info!("{} Subscription stopped due to shutdown request", log_prefix);
+                    break;
+                }
+                
+                // Check if error is retryable
+                let error_str = e.to_string().to_lowercase();
+                let is_retryable = error_str.contains("connection") || 
+                                  error_str.contains("network") || 
+                                  error_str.contains("timeout") ||
+                                  error_str.contains("broken pipe") ||
+                                  error_str.contains("reset");
+                
+                if is_retryable {
+                    warn!("{} Subscription failed with retryable error: {}, marking connection unhealthy", log_prefix, e);
+                    // Connection will be handled at the start of the next loop iteration
+                    sleep(Duration::from_millis(1000)).await; // Brief pause before retry
+                    continue;
+                } else {
+                    error!("{} Subscription failed with non-retryable error: {}", log_prefix, e);
+                    return Err(e);
+                }
+            }
         }
     }
 

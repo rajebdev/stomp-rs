@@ -93,6 +93,20 @@ logging:
   # Output destination: stdout, stderr, or file path
   output: "stdout"  # Override with: STOMP_LOGGING_OUTPUT
 
+# Connection retry settings for auto-reconnect functionality
+retry:
+  # Maximum number of reconnection attempts before giving up
+  max_attempts: 5  # Override with: STOMP_RETRY_MAX_ATTEMPTS
+  
+  # Initial delay in milliseconds for the first retry attempt
+  initial_delay_ms: 1000  # Override with: STOMP_RETRY_INITIAL_DELAY_MS
+  
+  # Maximum delay in milliseconds between retry attempts
+  max_delay_ms: 30000  # Override with: STOMP_RETRY_MAX_DELAY_MS
+  
+  # Multiplier for exponential backoff (each retry delay = previous * multiplier)
+  backoff_multiplier: 2.0  # Override with: STOMP_RETRY_BACKOFF_MULTIPLIER
+
 # Graceful shutdown settings
 shutdown:
   # Maximum time to wait for graceful shutdown

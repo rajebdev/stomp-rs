@@ -2,6 +2,10 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::broadcast;
+use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
@@ -44,6 +48,13 @@ impl<'a> OptionSetter<SessionBuilder> for WithCredentials<'a> {
 pub struct StompService {
     config: Config,
     session: Option<Session>,
+    /// Tracks whether the connection is healthy
+    is_connected: Arc<AtomicBool>,
+    /// Shutdown signal for graceful cleanup
+    shutdown_tx: Option<broadcast::Sender<()>>,
+    shutdown_rx: Option<broadcast::Receiver<()>>,
+    /// Track subscription destinations for reconnection
+    active_subscriptions: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl StompService {
@@ -51,9 +62,15 @@ impl StompService {
     pub async fn new(config: Config) -> Result<Self> {
         info!("🚀 Initializing STOMP service: {}", config.service.name);
 
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
         Ok(Self {
             config,
             session: None,
+            is_connected: Arc::new(AtomicBool::new(false)),
+            shutdown_tx: Some(shutdown_tx),
+            shutdown_rx: Some(shutdown_rx),
+            active_subscriptions: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
 
@@ -93,6 +110,7 @@ impl StompService {
             .with_context(|| "Failed to establish STOMP connection")?;
 
         self.session = Some(session);
+        self.is_connected.store(true, Ordering::Relaxed);
         info!(
             "✅ Successfully connected to STOMP broker with client-id: {}",
             client_id
@@ -263,6 +281,14 @@ impl StompService {
 
         info!("📥 Setting up topic subscription: {}", topic_path);
 
+        // Add this destination to active subscriptions for reconnection
+        {
+            let mut subs = self.active_subscriptions.lock().unwrap();
+            if !subs.contains(&topic_path) {
+                subs.push(topic_path.clone());
+            }
+        }
+
         let mut connected = false;
 
         while let Some(event) = session.next_event().await {
@@ -341,11 +367,13 @@ impl StompService {
 
                 SessionEvent::ErrorFrame(frame) => {
                     error!("❌ Error frame received: {:?}", frame);
+                    self.mark_unhealthy();
                     break;
                 }
 
                 SessionEvent::Disconnected(reason) => {
                     warn!("🔌 Session disconnected: {:?}", reason);
+                    self.mark_unhealthy();
                     break;
                 }
 
@@ -387,6 +415,14 @@ impl StompService {
         };
 
         info!("📥 Setting up queue subscription: {}", queue_path);
+
+        // Add this destination to active subscriptions for reconnection
+        {
+            let mut subs = self.active_subscriptions.lock().unwrap();
+            if !subs.contains(&queue_path) {
+                subs.push(queue_path.clone());
+            }
+        }
 
         let mut connected = false;
 
@@ -466,11 +502,13 @@ impl StompService {
 
                 SessionEvent::ErrorFrame(frame) => {
                     error!("❌ Error frame received: {:?}", frame);
+                    self.mark_unhealthy();
                     break;
                 }
 
                 SessionEvent::Disconnected(reason) => {
                     warn!("🔌 Session disconnected: {:?}", reason);
+                    self.mark_unhealthy();
                     break;
                 }
 
@@ -495,16 +533,285 @@ impl StompService {
             }
         }
 
+        // Mark as disconnected
+        self.is_connected.store(false, Ordering::Relaxed);
+        
+        // Clear active subscriptions
+        {
+            let mut subs = self.active_subscriptions.lock().unwrap();
+            subs.clear();
+        }
+        
+        // Send shutdown signal if we have a sender
+        if let Some(ref tx) = self.shutdown_tx {
+            let _ = tx.send(());
+        }
+
         Ok(())
     }
 
     /// Check if service is connected
     pub fn is_connected(&self) -> bool {
-        self.session.is_some()
+        self.session.is_some() && self.is_connected.load(Ordering::Relaxed)
     }
 
-    /// Get service configuration
+    /// Check if connection is healthy (alias for is_connected for clarity)
+    pub fn is_healthy(&self) -> bool {
+        self.is_connected()
+    }
+
+    /// Mark connection as unhealthy
+    fn mark_unhealthy(&self) {
+        self.is_connected.store(false, Ordering::Relaxed);
+        warn!("🔴 Connection marked as unhealthy");
+    }
+
+    /// Determine if an error is temporary and retryable
+    fn is_temporary_error(error: &anyhow::Error) -> bool {
+        let error_str = error.to_string().to_lowercase();
+        
+        // Check for common temporary/network errors
+        error_str.contains("connection refused") ||
+        error_str.contains("connection reset") ||
+        error_str.contains("timeout") ||
+        error_str.contains("network") ||
+        error_str.contains("broken pipe") ||
+        error_str.contains("connection aborted") ||
+        error_str.contains("host unreachable") ||
+        error_str.contains("no route to host")
+    }
+
+    /// Attempt to reconnect with exponential backoff
+    pub async fn reconnect(&mut self) -> Result<()> {
+        info!("🔄 Starting reconnection process...");
+        
+        let retry_config = self.config.retry.clone();
+        let mut attempt = 0u32;
+        
+        // Mark as disconnected
+        self.mark_unhealthy();
+        self.session = None;
+        
+        while retry_config.should_retry(attempt) {
+            // Check for shutdown signal
+            if let Some(ref mut rx) = self.shutdown_rx {
+                if let Ok(_) = rx.try_recv() {
+                    info!("🚨 Shutdown signal received, stopping reconnection");
+                    return Err(anyhow::anyhow!("Shutdown requested during reconnection"));
+                }
+            }
+            
+            let delay = retry_config.calculate_delay(attempt);
+            info!(
+                "🔁 Reconnection attempt {} of {} in {}ms",
+                attempt + 1,
+                retry_config.max_attempts,
+                delay.as_millis()
+            );
+            
+            // Wait before attempting reconnection (except for first attempt)
+            if attempt > 0 {
+                sleep(delay).await;
+            }
+            
+            // Attempt to connect
+            match self.connect().await {
+                Ok(()) => {
+                    info!("✅ Successfully reconnected to STOMP broker");
+                    
+                    // Resubscribe to previously active subscriptions
+                    if let Err(e) = self.resubscribe_destinations().await {
+                        warn!("⚠️ Failed to resubscribe to destinations: {}", e);
+                        // Continue anyway, as basic connection is established
+                    }
+                    
+                    return Ok(());
+                }
+                Err(e) => {
+                    if Self::is_temporary_error(&e) {
+                        warn!(
+                            "⚠️ Reconnection attempt {} failed (retryable): {}",
+                            attempt + 1,
+                            e
+                        );
+                    } else {
+                        error!(
+                            "❌ Reconnection attempt {} failed (non-retryable): {}",
+                            attempt + 1,
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            
+            attempt += 1;
+        }
+        
+        let final_error = anyhow::anyhow!(
+            "Failed to reconnect after {} attempts",
+            retry_config.max_attempts
+        );
+        error!("❌ {}", final_error);
+        Err(final_error)
+    }
+    
+    /// Resubscribe to previously active destinations after reconnection
+    async fn resubscribe_destinations(&mut self) -> Result<()> {
+        let subscriptions = {
+            let subs = self.active_subscriptions.lock().unwrap();
+            subs.clone()
+        };
+        
+        if subscriptions.is_empty() {
+            info!("📝 No previous subscriptions to restore");
+            return Ok(());
+        }
+        
+        info!("🔄 Resubscribing to {} destinations", subscriptions.len());
+        
+        for destination in subscriptions {
+            info!("🔄 Resubscribing to: {}", destination);
+            // Note: The actual resubscription logic will be handled by the 
+            // individual receive_topic/receive_queue methods when they detect
+            // a reconnection has occurred
+        }
+        
+        Ok(())
+    }
+
+/// Get service configuration
     pub fn get_config(&self) -> &Config {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, RetryConfig};
+    
+    #[test]
+    fn test_is_temporary_error() {
+        let temp_errors = vec![
+            anyhow::anyhow!("Connection refused"),
+            anyhow::anyhow!("Connection reset by peer"),
+            anyhow::anyhow!("Network timeout occurred"),
+            anyhow::anyhow!("Broken pipe error"),
+            anyhow::anyhow!("Host unreachable"),
+        ];
+        
+        for error in temp_errors {
+            assert!(StompService::is_temporary_error(&error), "Should be temporary: {}", error);
+        }
+        
+        let non_temp_errors = vec![
+            anyhow::anyhow!("Invalid credentials"),
+            anyhow::anyhow!("Authentication failed"),
+            anyhow::anyhow!("Permission denied"),
+            anyhow::anyhow!("Configuration error"),
+        ];
+        
+        for error in non_temp_errors {
+            assert!(!StompService::is_temporary_error(&error), "Should not be temporary: {}", error);
+        }
+    }
+    
+    #[test]
+    fn test_retry_config_calculations() {
+        let retry_config = RetryConfig {
+            max_attempts: 3,
+            initial_delay_ms: 100,
+            max_delay_ms: 1000,
+            backoff_multiplier: 2.0,
+        };
+        
+        // Test delay calculations
+        let delay_0 = retry_config.calculate_delay(0);
+        assert_eq!(delay_0.as_millis(), 100);
+        
+        let delay_1 = retry_config.calculate_delay(1);
+        assert_eq!(delay_1.as_millis(), 200); // 100 * 2^1
+        
+        let delay_2 = retry_config.calculate_delay(2);
+        assert_eq!(delay_2.as_millis(), 400); // 100 * 2^2
+        
+        // Test should_retry logic
+        assert!(retry_config.should_retry(0));
+        assert!(retry_config.should_retry(1));
+        assert!(retry_config.should_retry(2));
+        assert!(!retry_config.should_retry(3)); // Should not retry after max_attempts
+    }
+    
+    #[test]
+    fn test_retry_config_delay_capping() {
+        let retry_config = RetryConfig {
+            max_attempts: 10,
+            initial_delay_ms: 100,
+            max_delay_ms: 500, // Cap at 500ms
+            backoff_multiplier: 2.0,
+        };
+        
+        // Test that delay is capped at max_delay_ms
+        let delay_5 = retry_config.calculate_delay(5);
+        // Without capping: 100 * 2^5 = 3200ms, but should be capped at 500ms
+        assert_eq!(delay_5.as_millis(), 500);
+    }
+    
+    #[tokio::test]
+    async fn test_stomp_service_creation() {
+        let config = create_test_config();
+        let service = StompService::new(config).await;
+        assert!(service.is_ok());
+        
+        let service = service.unwrap();
+        assert!(!service.is_connected());
+        assert!(!service.is_healthy());
+    }
+    
+    fn create_test_config() -> Config {
+        use crate::config::*;
+        use std::collections::HashMap;
+        
+        Config {
+            service: ServiceConfig {
+                name: "test-service".to_string(),
+                version: "1.0.0".to_string(),
+                description: "Test service".to_string(),
+            },
+            broker: BrokerConfig {
+                host: "localhost".to_string(),
+                port: 61613,
+                credentials: None,
+                heartbeat: HeartbeatConfig {
+                    client_send_secs: 30,
+                    client_receive_secs: 30,
+                },
+                headers: HashMap::new(),
+            },
+            destinations: DestinationsConfig {
+                queues: HashMap::new(),
+                topics: HashMap::new(),
+            },
+            consumers: ConsumersConfig {
+                ack_mode: "client_individual".to_string(),
+                workers_per_queue: HashMap::new(),
+                workers_per_topic: HashMap::new(),
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                output: "stdout".to_string(),
+            },
+            shutdown: ShutdownConfig {
+                timeout_secs: 30,
+                grace_period_secs: 5,
+            },
+            retry: RetryConfig {
+                max_attempts: 3,
+                initial_delay_ms: 100,
+                max_delay_ms: 1000,
+                backoff_multiplier: 2.0,
+            },
+        }
     }
 }

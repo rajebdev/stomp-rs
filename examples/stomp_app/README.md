@@ -15,7 +15,15 @@ The application follows a modular architecture with the following components:
 
 ### Features
 
-✅ **Multi-Subscriber Architecture** ⭐ **NEW**
+✅ **Auto-Reconnection with Exponential Backoff** 🚀 **NEW**
+- Automatic detection and recovery from connection failures
+- Exponential backoff strategy prevents overwhelming the broker
+- Configurable retry limits and delay settings
+- Distinguishes between temporary and permanent errors
+- Seamless subscription restoration after reconnection
+- Graceful shutdown handling during reconnection attempts
+
+✅ **Multi-Subscriber Architecture** ⭐
 - Configure multiple concurrent subscribers per destination
 - Load distribution for queues (competing consumers)
 - Broadcasting for topics (all subscribers receive messages)
@@ -87,6 +95,20 @@ consumers:
   workers_per_topic:
     notifications: 2   # 2 workers for notifications topic
     events: 1          # 1 worker for events topic
+
+# 🚀 NEW: Auto-reconnection settings
+retry:
+  # Maximum number of reconnection attempts before giving up
+  max_attempts: 5          # Default: 5 attempts
+  
+  # Initial delay in milliseconds for the first retry attempt
+  initial_delay_ms: 1000   # Default: 1 second
+  
+  # Maximum delay in milliseconds between retry attempts
+  max_delay_ms: 30000      # Default: 30 seconds
+  
+  # Multiplier for exponential backoff (each retry delay = previous * multiplier)
+  backoff_multiplier: 2.0  # Default: 2.0 (doubles each time)
 ```
 
 ### Running the Application
@@ -106,20 +128,21 @@ cargo build --release
 🚀 Starting Multi-Subscriber STOMP Application: stomp-service
 📋 Version: 1.0.0
 🔗 Broker: 10.0.7.127:31333
+⚙️ Auto-reconnect: 5 attempts, 1s-30s delays, 2.0x backoff
 📊 Queue 'default' configured with 2 workers
 📊 Queue 'api_requests' configured with 4 workers
 📊 Queue 'errors' configured with 1 workers
 📊 Topic 'notifications' configured with 2 workers
 📊 Topic 'events' configured with 1 workers
 🔧 Spawning 10 total subscribers...
-[default][default#1] Starting subscriber...
-[default][default#2] Starting subscriber...
-[api_requests][api_requests#1] Starting subscriber...
-[notifications][notifications#1] Starting subscriber...
-[notifications][notifications#2] Starting subscriber...
+[default][default#1] Starting subscriber with auto-reconnection...
+[default][default#2] Starting subscriber with auto-reconnection...
+[api_requests][api_requests#1] Starting subscriber with auto-reconnection...
+[notifications][notifications#1] Starting subscriber with auto-reconnection...
+[notifications][notifications#2] Starting subscriber with auto-reconnection...
 📤 Sending test messages to multiple subscribers...
 ✅ Test messages sent successfully
-🔄 Multi-subscriber system running... Press Ctrl+C to shutdown gracefully
+🔄 Multi-subscriber system running with auto-reconnect... Press Ctrl+C to shutdown gracefully
 ```
 
 ## Multi-Subscriber Behavior
@@ -166,6 +189,26 @@ Each subscriber logs with a unique identifier for easy tracking:
 [notifications][notifications#1] Processing topic message: Event broadcast
 [notifications][notifications#2] Processing topic message: Event broadcast
 ```
+
+### Connection Resilience 🚀 **NEW**
+
+The system automatically handles connection failures and network issues:
+
+```
+[api_requests][api_requests#1] 🔌 Session disconnected: NetworkError
+[api_requests][api_requests#1] 🔴 Connection marked as unhealthy
+[api_requests][api_requests#1] Connection unhealthy, attempting reconnection...
+[api_requests][api_requests#1] 🔄 Starting reconnection process...
+[api_requests][api_requests#1] 🔁 Reconnection attempt 1 of 5 in 1000ms
+[api_requests][api_requests#1] ⚠️ Reconnection attempt 1 failed (retryable): Connection refused
+[api_requests][api_requests#1] 🔁 Reconnection attempt 2 of 5 in 2000ms
+[api_requests][api_requests#1] ✅ Successfully reconnected to STOMP broker
+[api_requests][api_requests#1] 🔄 Resubscribing to 1 destinations
+[api_requests][api_requests#1] Reconnection successful, resuming subscription
+[api_requests][api_requests#1] 📥 Starting queue subscription...
+```
+
+📚 **Detailed Guide**: See [AUTO_RECONNECT_GUIDE.md](AUTO_RECONNECT_GUIDE.md) for comprehensive documentation
 
 ## API Specification
 
@@ -252,15 +295,15 @@ broker:
   heartbeat:              # Connection heartbeat (milliseconds)
     client_send_secs: 10000
     client_receive_secs: 10000
-  retry:                  # Connection retry settings
-    max_attempts: 5
-    initial_delay_secs: 1
-    max_delay_secs: 60
-    backoff_multiplier: 2.0
+  retry:                  # Auto-reconnection settings (🚀 NEW)
+    max_attempts: 5              # Maximum reconnection attempts
+    initial_delay_ms: 1000       # Initial delay in milliseconds
+    max_delay_ms: 30000          # Maximum delay cap in milliseconds
+    backoff_multiplier: 2.0      # Exponential backoff multiplier
   headers: {}             # Custom connection headers
 ```
 
-### Multi-Subscriber Settings ⭐ **NEW**
+### Multi-Subscriber Settings ⭐
 
 ```yaml
 consumers:
@@ -277,6 +320,13 @@ consumers:
     events: 3           # 3 workers for event processing
     notifications: 2    # 2 workers for notifications
     monitoring: 1       # Single worker for monitoring
+
+# Auto-Reconnection Settings 🚀 **NEW**
+retry:
+  max_attempts: 5            # Maximum reconnection attempts
+  initial_delay_ms: 1000     # Initial delay (1 second)
+  max_delay_ms: 30000        # Maximum delay (30 seconds)  
+  backoff_multiplier: 2.0    # Exponential growth factor
 ```
 
 ### Destinations

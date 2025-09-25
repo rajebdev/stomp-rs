@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::time::Duration;
 
 /// Main configuration structure that mirrors the config.yaml file
 #[derive(Debug, Deserialize, Clone)]
@@ -12,6 +13,8 @@ pub struct Config {
     pub consumers: ConsumersConfig,
     pub logging: LoggingConfig,
     pub shutdown: ShutdownConfig,
+    #[serde(default = "RetryConfig::default")]
+    pub retry: RetryConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -45,8 +48,8 @@ pub struct HeartbeatConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct RetryConfig {
     pub max_attempts: u32,
-    pub initial_delay_secs: u32,
-    pub max_delay_secs: u32,
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
     pub backoff_multiplier: f64,
 }
 
@@ -80,6 +83,41 @@ pub struct LoggingConfig {
 pub struct ShutdownConfig {
     pub timeout_secs: u32,
     pub grace_period_secs: u32,
+}
+
+impl RetryConfig {
+    /// Calculate the delay for the given retry attempt using exponential backoff
+    pub fn calculate_delay(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return Duration::from_millis(self.initial_delay_ms);
+        }
+
+        let delay_ms = (self.initial_delay_ms as f64) * self.backoff_multiplier.powi(attempt as i32);
+        let capped_delay_ms = delay_ms.min(self.max_delay_ms as f64) as u64;
+        
+        Duration::from_millis(capped_delay_ms)
+    }
+
+    /// Check if we should retry based on the current attempt number
+    pub fn should_retry(&self, attempt: u32) -> bool {
+        attempt < self.max_attempts
+    }
+
+    /// Get the next retry attempt number (0-indexed)
+    pub fn next_attempt(&self, current_attempt: u32) -> u32 {
+        current_attempt + 1
+    }
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 5,
+            initial_delay_ms: 1000,
+            max_delay_ms: 30000,
+            backoff_multiplier: 2.0,
+        }
+    }
 }
 
 impl Config {
@@ -207,6 +245,12 @@ logging:
 shutdown:
   timeout_secs: 30
   grace_period_secs: 5
+
+retry:
+  max_attempts: 3
+  initial_delay_ms: 500
+  max_delay_ms: 5000
+  backoff_multiplier: 2.0
         "#;
 
         let config: Config = serde_yaml::from_str(yaml_content).unwrap();
@@ -221,5 +265,39 @@ shutdown:
         let (send_ms, recv_ms) = config.get_heartbeat_ms();
         assert_eq!(send_ms, 30000);
         assert_eq!(recv_ms, 30000);
+
+        // Test retry configuration
+        assert_eq!(config.retry.max_attempts, 3);
+        assert_eq!(config.retry.initial_delay_ms, 500);
+        assert_eq!(config.retry.max_delay_ms, 5000);
+        assert_eq!(config.retry.backoff_multiplier, 2.0);
+
+        // Test retry delay calculations
+        let delay_0 = config.retry.calculate_delay(0);
+        assert_eq!(delay_0.as_millis(), 500);
+
+        let delay_1 = config.retry.calculate_delay(1);
+        assert_eq!(delay_1.as_millis(), 1000); // 500 * 2^1
+
+        let delay_2 = config.retry.calculate_delay(2);
+        assert_eq!(delay_2.as_millis(), 2000); // 500 * 2^2
+
+        // Test should_retry logic
+        assert!(config.retry.should_retry(0));
+        assert!(config.retry.should_retry(2));
+        assert!(!config.retry.should_retry(3)); // max_attempts is 3, so attempt 3 should not retry
+    }
+
+    #[test]
+    fn test_retry_config_default() {
+        let retry_config = RetryConfig::default();
+        assert_eq!(retry_config.max_attempts, 5);
+        assert_eq!(retry_config.initial_delay_ms, 1000);
+        assert_eq!(retry_config.max_delay_ms, 30000);
+        assert_eq!(retry_config.backoff_multiplier, 2.0);
+        
+        // Test delay capping
+        let large_delay = retry_config.calculate_delay(10); // Should be capped at max_delay_ms
+        assert_eq!(large_delay.as_millis(), 30000);
     }
 }
