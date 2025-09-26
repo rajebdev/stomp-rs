@@ -1,6 +1,25 @@
-# STOMP Multi-Subscriber Application
+# STOMP Auto-Scaling Service
 
-A high-performance Rust application implementing STOMP (Simple Text Orientated Messaging Protocol) with **multi-subscriber architecture** for concurrent message processing across topics and queues.
+A production-ready STOMP service implementation in Rust with **auto-scaling capabilities**, comprehensive configuration, error handling, and auto-reconnection features.
+
+## 🎯 Auto-Scaling Features
+
+This service can automatically scale the number of consumer workers up and down based on real-time queue metrics from ActiveMQ:
+
+- **Dynamic Worker Scaling**: Automatically adjust the number of consumers per queue based on queue depth
+- **ActiveMQ Integration**: Real-time monitoring via ActiveMQ's Jolokia REST API
+- **Configurable Scaling Rules**: Set min/max worker limits and scaling thresholds per queue
+- **Smart Scaling Logic**: Includes cooldown periods and hysteresis to prevent flapping
+- **Backward Compatibility**: Falls back to static worker mode when auto-scaling is disabled
+
+### How Auto-Scaling Works
+
+1. **Monitoring**: Every 5 seconds (configurable), the service queries ActiveMQ for queue metrics
+2. **Decision Engine**: Compares queue depth with current worker count:
+   - **Scale Up**: If `queue_size > current_workers` and `current_workers < max_workers`
+   - **Scale Down**: If `queue_size < scale_down_threshold` (default: 4) and `current_workers > min_workers`
+3. **Execution**: Dynamically spawns or stops consumer workers while maintaining STOMP connections
+4. **Cooldown**: Prevents rapid scaling changes with a 30-second cooldown period
 
 ## Architecture
 
@@ -37,7 +56,7 @@ The application follows a modular architecture with the following components:
 - Graceful connection management
 
 ✅ **Configuration Management**
-- YAML-based configuration with `workers_per_queue` and `workers_per_topic`
+- YAML-based configuration with auto-scaling and static worker settings
 - Environment variable overrides
 - Broker connection settings
 - Destination management
@@ -63,13 +82,13 @@ The application follows a modular architecture with the following components:
 
 ### Configuration
 
-Update `config.yaml` with your broker details and **multi-subscriber settings**:
+Update `config.yaml` with your broker details and **auto-scaling settings**:
 
 ```yaml
 service:
-  name: "stomp-service"
+  name: "stomp-autoscaler"
   version: "1.0.0"
-  description: "Production STOMP messaging service"
+  description: "Auto-scaling STOMP messaging service"
 
 broker:
   host: "10.0.7.127"  # Your STOMP broker IP
@@ -78,48 +97,86 @@ broker:
     username: "admin"
     password: "admin"
   heartbeat:
-    client_send_secs: 10000
-    client_receive_secs: 10000
+    client_send_secs: 30
+    client_receive_secs: 30
 
-# ⭐ NEW: Multi-subscriber configuration
+# 🎯 NEW: Auto-scaling monitoring configuration
+monitoring:
+  # ActiveMQ management console settings
+  activemq:
+    base_url: "http://10.0.7.127:8161"  # ActiveMQ management console URL
+    broker_name: "localhost"             # Broker name (usually "localhost")
+    credentials:                          # Optional credentials for management console
+      username: "admin"
+      password: "admin"
+  
+  # Auto-scaling configuration
+  scaling:
+    interval_secs: 5                    # Check queue metrics every 5 seconds
+    scale_down_threshold: 4             # Scale down when queue count < 4
+    
+    # Queue-specific worker scaling rules: "queue_name: min-max"
+    worker_per_queue:
+      demo:
+        min: 1  # Minimum 1 worker always running
+        max: 2  # Maximum 2 workers under high load
+      default:
+        min: 1  # Minimum 1 worker always running
+        max: 4  # Maximum 4 workers under high load
+      api_requests:
+        min: 2  # Always have 2 workers for API requests
+        max: 6  # Scale up to 6 workers if needed
+      errors:
+        min: 1  # Single error handler minimum
+        max: 2  # Max 2 error handlers
+
+# Legacy static worker configuration (used when monitoring is disabled)
 consumers:
   ack_mode: "client_individual"
-  
-  # Number of concurrent workers per queue (load distribution)
   workers_per_queue:
-    default: 2         # 2 workers for default queue
-    api_requests: 4    # 4 workers for high-volume API requests  
-    errors: 1          # 1 worker for error queue
-  
-  # Number of concurrent workers per topic (broadcasting)
-  workers_per_topic:
-    notifications: 2   # 2 workers for notifications topic
-    events: 1          # 1 worker for events topic
+    default: 2
+    api_requests: 4
+    errors: 1
+  # Note: Topics always use 1 worker (no configuration needed)
 
-# 🚀 NEW: Auto-reconnection settings
 retry:
-  # Maximum number of reconnection attempts before giving up
-  max_attempts: 5          # Default: 5 attempts
-  
-  # Initial delay in milliseconds for the first retry attempt
-  initial_delay_ms: 1000   # Default: 1 second
-  
-  # Maximum delay in milliseconds between retry attempts
-  max_delay_ms: 30000      # Default: 30 seconds
-  
-  # Multiplier for exponential backoff (each retry delay = previous * multiplier)
-  backoff_multiplier: 2.0  # Default: 2.0 (doubles each time)
+  max_attempts: -1         # Infinite retries for production
+  initial_delay_ms: 1000
+  max_delay_ms: 30000
+  backoff_multiplier: 2.0
 ```
 
 ### Running the Application
 
 ```bash
-# Build and run
+# Build and run with auto-scaling (requires ActiveMQ management console)
 cargo run
 
 # Or build first, then run
 cargo build --release
-./target/release/stomp_app
+./target/release/stomp_app_with_auto_scalling
+```
+
+### ✨ Quick Start with Auto-Scaling
+
+1. **Ensure ActiveMQ is running** with management console enabled on port 8161
+2. **Update config.yaml** with your broker details and enable monitoring section
+3. **Configure scaling ranges** for your queues (e.g., demo: 1-2, default: 1-4)
+4. **Run the application** - it will automatically start with minimum workers and scale based on queue depth
+
+**Expected Output:**
+```
+🚀 Starting Auto-Scaling STOMP Application: stomp-autoscaler
+🎯 Auto-scaling is ENABLED
+🏊 Creating consumer pool for 'demo' (workers: 1-2)
+🏊 Creating consumer pool for 'default' (workers: 1-4)
+✅ All consumer pools initialized
+🎯 Auto-scaler initialized with 2 queues
+🔄 Starting auto-scaling monitor (interval: 5 seconds)
+📈 Scaling up queue 'default': adding 2 workers (queue_size: 8)
+✅ Scaled up queue 'default': added 2 workers
+📉 Scaling down queue 'demo': removing 1 workers (queue_size: 1)
+✅ Scaled down queue 'demo': removed 1 workers
 ```
 
 ### Example Output
@@ -315,11 +372,8 @@ consumers:
     medium_load: 4      # 4 workers for moderate load
     low_priority: 1     # Single worker for low-priority tasks
     
-  # Topic workers (broadcast receivers)  
-  workers_per_topic:
-    events: 3           # 3 workers for event processing
-    notifications: 2    # 2 workers for notifications
-    monitoring: 1       # Single worker for monitoring
+  # Note: Topics always use exactly 1 worker each (no configuration needed)
+  # This ensures proper broadcast behavior where all subscribers receive messages
 
 # Auto-Reconnection Settings 🚀 **NEW**
 retry:

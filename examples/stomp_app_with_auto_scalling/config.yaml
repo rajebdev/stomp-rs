@@ -74,16 +74,10 @@ consumers:
   # Acknowledgment mode - always use client_individual for precise control
   ack_mode: "client_individual"
   
-  # Number of worker threads per queue
-  workers_per_queue:
-    default: 2         # 2 workers for default queue
-    api_requests: 4    # 4 workers for high-volume API requests
-    errors: 1          # 1 worker for error queue
+  # Static worker configuration is REMOVED - now using auto-scaling min values
+  # workers_per_queue: REMOVED - using monitoring.scaling.worker_per_queue.min as starting point
   
-  # Number of worker threads per topic
-  workers_per_topic:
-    notifications: 2   # 2 workers for notifications topic
-    events: 1          # 1 worker for events topic
+  # Topics always use 1 worker (no configuration needed)
 
 # Logging configuration  
 logging:
@@ -115,3 +109,33 @@ shutdown:
   
   # Time to wait for in-flight messages to complete
   grace_period_secs: 5  # Override with: STOMP_SHUTDOWN_GRACE_PERIOD_SECS
+
+# Auto-scaling monitoring configuration (optional)
+monitoring:
+  # ActiveMQ management console settings
+  activemq:
+    base_url: "http://10.0.7.127:8131"  # ActiveMQ management console URL
+    broker_name: "localhost"             # Broker name (usually "localhost")
+    credentials:                          # Optional credentials for management console
+      username: "admin"
+      password: "admin"
+  
+  # Auto-scaling configuration
+  scaling:
+    interval_secs: 5                    # Check queue metrics every 5 seconds
+    
+    # Queue-specific worker scaling rules: "queue_name: min-max"
+    # Note: Use the same key names as in destinations.queues section
+    worker_per_queue:
+      default:
+        min: 1  
+        max: 4
+      modern_major_general_0:
+        min: 1
+        max: 2
+      api_requests:
+        min: 2
+        max: 6
+      errors:
+        min: 1
+        max: 2

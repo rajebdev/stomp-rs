@@ -15,6 +15,8 @@ pub struct Config {
     pub shutdown: ShutdownConfig,
     #[serde(default = "RetryConfig::default")]
     pub retry: RetryConfig,
+    #[serde(default)]
+    pub monitoring: Option<MonitoringConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -69,9 +71,8 @@ pub struct DestinationConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConsumersConfig {
     pub ack_mode: String,
-    pub workers_per_queue: HashMap<String, u32>,
-    #[serde(default)]
-    pub workers_per_topic: HashMap<String, u32>,
+    // workers_per_queue removed - now using auto-scaling configuration
+    // workers_per_topic removed - topics always use 1 worker
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -85,6 +86,44 @@ pub struct ShutdownConfig {
     pub timeout_secs: u32,
     pub grace_period_secs: u32,
 }
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MonitoringConfig {
+    /// ActiveMQ management console configuration
+    pub activemq: ActiveMQMonitoringConfig,
+    /// Auto-scaling configuration
+    pub scaling: ScalingConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ActiveMQMonitoringConfig {
+    /// ActiveMQ management console URL (e.g., http://localhost:8161)
+    pub base_url: String,
+    /// Optional credentials for ActiveMQ management console
+    pub credentials: Option<CredentialsConfig>,
+    /// Broker name (usually "localhost" for default installations)
+    #[serde(default = "default_broker_name")]
+    pub broker_name: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ScalingConfig {
+    /// Polling interval in seconds for checking queue metrics
+    pub interval_secs: u64,
+    /// Queue-specific worker scaling rules
+    pub worker_per_queue: HashMap<String, WorkerRange>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WorkerRange {
+    pub min: u32,
+    pub max: u32,
+}
+
+fn default_broker_name() -> String {
+    "localhost".to_string()
+}
+
 
 impl RetryConfig {
     /// Calculate the delay for the given retry attempt using exponential backoff
@@ -109,27 +148,6 @@ impl RetryConfig {
         }
     }
 
-    /// Get the next retry attempt number (0-indexed)
-    pub fn next_attempt(&self, current_attempt: u32) -> u32 {
-        current_attempt + 1
-    }
-
-    /// Check if infinite retries are enabled
-    pub fn is_infinite_retries(&self) -> bool {
-        self.max_attempts < 0
-    }
-
-    /// Create a RetryConfig with finite retry attempts
-    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
-        self.max_attempts = max_attempts as i32;
-        self
-    }
-
-    /// Create a RetryConfig with infinite retry attempts
-    pub fn with_infinite_retries(mut self) -> Self {
-        self.max_attempts = -1;
-        self
-    }
 }
 
 impl Default for RetryConfig {
@@ -155,10 +173,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Get the broker connection URL
-    pub fn get_broker_url(&self) -> String {
-        format!("{}:{}", self.broker.host, self.broker.port)
-    }
 
     /// Get credentials if available
     pub fn get_credentials(&self) -> Option<(String, String)> {
@@ -186,42 +200,6 @@ impl Config {
         )
     }
 
-    /// Get number of workers for a specific queue (default: 1)
-    pub fn get_queue_workers(&self, queue_name: &str) -> u32 {
-        self.consumers
-            .workers_per_queue
-            .get(queue_name)
-            .copied()
-            .unwrap_or(1)
-    }
-
-    /// Get number of workers for a specific topic (default: 1)
-    pub fn get_topic_workers(&self, topic_name: &str) -> u32 {
-        self.consumers
-            .workers_per_topic
-            .get(topic_name)
-            .copied()
-            .unwrap_or(1)
-    }
-
-    /// Get all configured queues with their worker counts
-    pub fn get_all_queue_workers(&self) -> Vec<(String, u32)> {
-        self.destinations
-            .queues
-            .keys()
-            .map(|name| (name.clone(), self.get_queue_workers(name)))
-            .collect()
-    }
-
-    /// Get all configured topics with their worker counts
-    pub fn get_all_topic_workers(&self) -> Vec<(String, u32)> {
-        self.destinations
-            .topics
-            .keys()
-            .map(|name| (name.clone(), self.get_topic_workers(name)))
-            .collect()
-    }
-
     /// Get all configured queue names
     pub fn get_all_queue_names(&self) -> Vec<String> {
         self.destinations.queues.keys().cloned().collect()
@@ -230,6 +208,68 @@ impl Config {
     /// Get all configured topic names
     pub fn get_all_topic_names(&self) -> Vec<String> {
         self.destinations.topics.keys().cloned().collect()
+    }
+
+    /// Get auto-scaling configuration if enabled
+    pub fn get_monitoring_config(&self) -> Option<&MonitoringConfig> {
+        self.monitoring.as_ref()
+    }
+
+    /// Check if auto-scaling is enabled
+    pub fn is_auto_scaling_enabled(&self) -> bool {
+        self.monitoring.is_some()
+    }
+
+    /// Get worker range for a specific queue in auto-scaling mode
+    pub fn get_queue_worker_range(&self, queue_name: &str) -> Option<&WorkerRange> {
+        self.monitoring
+            .as_ref()
+            .and_then(|m| m.scaling.worker_per_queue.get(queue_name))
+    }
+
+    /// Get all queues configured for auto-scaling
+    pub fn get_auto_scaling_queues(&self) -> Vec<String> {
+        self.monitoring
+            .as_ref()
+            .map(|m| m.scaling.worker_per_queue.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get the monitoring interval in seconds
+    pub fn get_monitoring_interval_secs(&self) -> Option<u64> {
+        self.monitoring.as_ref().map(|m| m.scaling.interval_secs)
+    }
+
+
+    /// Get the actual ActiveMQ queue name from config key
+    /// Converts from destinations.queues.key.path to just the queue name
+    /// Example: "/queue/demo" -> "demo", "/queue/api.requests" -> "api.requests"
+    pub fn get_activemq_queue_name(&self, queue_config_key: &str) -> Option<String> {
+        self.destinations
+            .queues
+            .get(queue_config_key)
+            .map(|config| {
+                // Extract queue name from path like "/queue/demo" -> "demo"
+                if config.path.starts_with("/queue/") {
+                    config.path.strip_prefix("/queue/").unwrap_or(&config.path).to_string()
+                } else {
+                    // Fallback to full path if it doesn't follow expected format
+                    config.path.clone()
+                }
+            })
+    }
+
+    /// Get mapping of config keys to ActiveMQ queue names for all configured queues
+    pub fn get_queue_key_to_activemq_name_mapping(&self) -> std::collections::HashMap<String, String> {
+        let mut mapping = std::collections::HashMap::new();
+        
+        for (config_key, _queue_config) in &self.destinations.queues {
+            if let Some(activemq_name) = self.get_activemq_queue_name(config_key) {
+                mapping.insert(config_key.clone(), activemq_name);
+            }
+        }
+        
+        mapping
     }
 }
 
@@ -268,8 +308,6 @@ destinations:
 
 consumers:
   ack_mode: "client_individual"
-  workers_per_queue:
-    test: 1
 
 logging:
   level: "info"
@@ -338,5 +376,68 @@ retry:
         assert!(retry_config.should_retry(100));
         assert!(retry_config.should_retry(1000000)); // Should always retry with infinite retries
         assert!(retry_config.is_infinite_retries()); // Should return true for -1
+    }
+
+    #[test]
+    fn test_activemq_queue_name_extraction() {
+        let yaml_content = r#"
+service:
+  name: "test-service"
+  version: "1.0.0"
+  description: "Test service"
+
+broker:
+  host: "localhost"
+  port: 61613
+  heartbeat:
+    client_send_secs: 30
+    client_receive_secs: 30
+  headers: {}
+
+destinations:
+  queues:
+    default:
+      path: "/queue/demo"
+      headers: {}
+    api_requests:
+      path: "/queue/api.requests"
+      headers: {}
+    errors:
+      path: "/queue/errors"
+      headers: {}
+  topics: {}
+
+consumers:
+  ack_mode: "client_individual"
+
+logging:
+  level: "info"
+  output: "stdout"
+
+shutdown:
+  timeout_secs: 30
+  grace_period_secs: 5
+
+retry:
+  max_attempts: 3
+  initial_delay_ms: 500
+  max_delay_ms: 5000
+  backoff_multiplier: 2.0
+        "#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        
+        // Test individual queue name extraction
+        assert_eq!(config.get_activemq_queue_name("default"), Some("demo".to_string()));
+        assert_eq!(config.get_activemq_queue_name("api_requests"), Some("api.requests".to_string()));
+        assert_eq!(config.get_activemq_queue_name("errors"), Some("errors".to_string()));
+        assert_eq!(config.get_activemq_queue_name("nonexistent"), None);
+        
+        // Test mapping function
+        let mapping = config.get_queue_key_to_activemq_name_mapping();
+        assert_eq!(mapping.len(), 3);
+        assert_eq!(mapping.get("default"), Some(&"demo".to_string()));
+        assert_eq!(mapping.get("api_requests"), Some(&"api.requests".to_string()));
+        assert_eq!(mapping.get("errors"), Some(&"errors".to_string()));
     }
 }

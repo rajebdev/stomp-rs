@@ -1,346 +1,95 @@
-mod config;
-mod handler;
-mod service;
-
 use anyhow::Result;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::signal;
-use tokio::sync::broadcast;
-use tokio::task::JoinSet;
-use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use stomp_app_with_auto_scalling::runner::StompRunner;
+use stomp_app_with_auto_scalling::utils;
+use tracing::info;
 
-use config::Config;
-use handler::MessageHandlers;
-use service::StompService;
-
-/// Shared shutdown signal
-static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// Create a queue message handler
-fn create_queue_handler(
-    queue_name: &str,
-) -> impl Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-       + Clone
-       + Send
-       + Sync
-       + 'static {
-    let queue_name = queue_name.to_string();
-    move |msg: String| {
-        let queue_name = queue_name.clone();
-        Box::pin(async move {
-            let start_time = std::time::Instant::now();
-            info!(
-                "[{}] Processing queue message: {}",
-                queue_name,
-                msg.chars().take(50).collect::<String>()
-            );
-
-            let result = MessageHandlers::queue_handler(msg).await;
-
-            let processing_time = start_time.elapsed();
-            match result {
-                Ok(()) => {
-                    info!(
-                        "[{}] ✅ Message processed successfully in {}ms",
-                        queue_name,
-                        processing_time.as_millis()
-                    );
-                }
-                Err(e) => {
-                    error!("[{}] ❌ Message processing failed: {}", queue_name, e);
-                    return Err(e);
-                }
-            }
-            Ok(())
-        }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-    }
+// Custom handler for processing order messages
+async fn handle_order_message(message: String) -> Result<()> {
+    info!("🛒 Processing ORDER: {}", message);
+    // Simulate some processing time
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    Ok(())
 }
 
-/// Create a topic message handler
-fn create_topic_handler(
-    topic_name: &str,
-) -> impl Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-       + Clone
-       + Send
-       + Sync
-       + 'static {
-    let topic_name = topic_name.to_string();
-    move |msg: String| {
-        let topic_name = topic_name.clone();
-        Box::pin(async move {
-            let start_time = std::time::Instant::now();
-            info!(
-                "[{}] Processing topic message: {}",
-                topic_name,
-                msg.chars().take(50).collect::<String>()
-            );
+// Custom handler for processing notification messages
+async fn handle_notification_message(message: String) -> Result<()> {
+    info!("🔔 Processing NOTIFICATION: {}", message);
+    // Simulate some processing time
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    Ok(())
+}
 
-            let result = MessageHandlers::topic_handler(msg).await;
-
-            let processing_time = start_time.elapsed();
-            match result {
-                Ok(()) => {
-                    info!(
-                        "[{}] ✅ Message processed successfully in {}ms",
-                        topic_name,
-                        processing_time.as_millis()
-                    );
-                }
-                Err(e) => {
-                    error!("[{}] ❌ Message processing failed: {}", topic_name, e);
-                    return Err(e);
-                }
-            }
-            Ok(())
-        }) as Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-    }
+// Custom handler for processing API request messages
+async fn handle_api_request_message(message: String) -> Result<()> {
+    info!("🌐 Processing API REQUEST: {}", message);
+    // Simulate API processing
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize structured logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_line_number(false)
-        .init();
-
+    // Initialize logging first
+    utils::initialize_logging();
+    
     // Load configuration
-    let config = Config::load("config.yaml")?;
+    let config = utils::load_configuration("config.yaml")?;
+    
+    // Display startup information
+    utils::display_startup_info(&config);
+    
+    // Clone config for sending test messages
+    let config_for_test = config.clone();
+    
+    // Start sending test messages in background
+    tokio::spawn(async move {
+        utils::send_test_messages(&config_for_test).await;
+    });
+    
+    // Example 1: Use configuration with custom handlers
+    StompRunner::new()
+        .with_config(config)
+        .add_queue("orders", handle_order_message)  // Custom handler for orders queue
+        .add_topic("notifications", handle_notification_message)  // Custom handler for notifications topic
+        .add_auto_scaling_queue("api_requests", handle_api_request_message)  // Custom handler for auto-scaling queue
+        .run()
+        .await
 
-    info!(
-        "🚀 Starting Multi-Subscriber STOMP Application: {}",
-        config.service.name
-    );
-    info!("📋 Version: {}", config.service.version);
-    info!("📄 Description: {}", config.service.description);
-    info!("🔗 Broker: {}:{}", config.broker.host, config.broker.port);
-
-    // Create shutdown broadcast channel
-    let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
-
-    // Create task collection for managing subscribers
-    let mut subscriber_tasks = JoinSet::new();
-
-    // Get all configured queues and topics
-    let queue_names = config.get_all_queue_names();
-    let topic_names = config.get_all_topic_names();
-
-    info!(
-        "🔧 Setting up {} queues and {} topics...",
-        queue_names.len(),
-        topic_names.len()
-    );
-
-    // Start subscribers for each queue (workers will be managed internally by service)
-    for queue_name in queue_names {
-        let worker_count = config.get_queue_workers(&queue_name);
-        info!(
-            "📊 Queue '{}' configured with {} workers",
-            queue_name, worker_count
-        );
-
-        let config_clone = config.clone();
-        let _shutdown_rx = shutdown_tx.subscribe();
-        let queue_name_clone = queue_name.clone();
-
-        subscriber_tasks.spawn(async move {
-            let mut service = StompService::new(config_clone).await?;
-            service
-                .receive_queue(&queue_name_clone, create_queue_handler(&queue_name_clone))
-                .await
-        });
-    }
-
-    // Start subscribers for each topic (workers will be managed internally by service)
-    for topic_name in topic_names {
-        let worker_count = config.get_topic_workers(&topic_name);
-        info!(
-            "📊 Topic '{}' configured with {} workers",
-            topic_name, worker_count
-        );
-
-        let config_clone = config.clone();
-        let _shutdown_rx = shutdown_tx.subscribe();
-        let topic_name_clone = topic_name.clone();
-
-        subscriber_tasks.spawn(async move {
-            let mut service = StompService::new(config_clone).await?;
-            service
-                .receive_topic(&topic_name_clone, create_topic_handler(&topic_name_clone))
-                .await
-        });
-    }
-
-    // Wait a bit before starting message sending
-    sleep(Duration::from_secs(2)).await;
-
-    // Create STOMP service for sending messages
-    let mut stomp_service = StompService::new(config.clone()).await?;
-
-    // Setup graceful shutdown signal handler
-    let shutdown_handle = {
-        let shutdown_tx = shutdown_tx.clone();
-        tokio::spawn(async move {
-            setup_signal_handlers().await;
-            let _ = shutdown_tx.send(()); // Notify all subscribers to shutdown
+    // Alternative examples (commented out):
+    
+    // Example 2: Simple setup with all defaults
+    /*
+    StompRunner::new()
+        .with_config_file("config.yaml")?
+        .run()
+        .await
+    */
+    
+    // Example 3: Custom configuration with multiple handlers
+    /*
+    // Send test messages in background if needed
+    let config_for_test = utils::load_configuration("config.yaml")?;
+    tokio::spawn(async move {
+        utils::send_test_messages(&config_for_test).await;
+    });
+    
+    StompRunner::new()
+        .with_config_file("config.yaml")?
+        .add_queue("user_events", |msg| async move {
+            info!("👤 User event: {}", msg);
+            Ok(())
         })
-    };
-
-    // Demonstrate sending messages
-    info!("📤 Sending test messages to multiple subscribers...");
-
-    // Send to topic
-    let mut topic_headers = HashMap::new();
-    topic_headers.insert("content-type".to_string(), "text/plain".to_string());
-    topic_headers.insert("priority".to_string(), "high".to_string());
-
-    if let Err(e) = stomp_service
-        .send_topic(
-            "notifications",
-            "Test topic message for multi-subscribers",
-            topic_headers,
-        )
+        .add_queue("system_logs", |msg| async move {
+            info!("📋 System log: {}", msg);
+            Ok(())
+        })
+        .add_auto_scaling_queue("high_load_queue", |msg| async move {
+            info!("⚡ High load processing: {}", msg);
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            Ok(())
+        })
+        .run()
         .await
-    {
-        error!("Failed to send topic message: {}", e);
-    }
-
-    // Send to queue
-    let mut queue_headers = HashMap::new();
-    queue_headers.insert("content-type".to_string(), "text/plain".to_string());
-    queue_headers.insert("persistent".to_string(), "true".to_string());
-
-    if let Err(e) = stomp_service
-        .send_queue(
-            "default",
-            "Test queue message for multi-subscribers",
-            queue_headers,
-        )
-        .await
-    {
-        error!("Failed to send queue message: {}", e);
-    }
-
-    info!("✅ Test messages sent successfully");
-    info!("🔄 Multi-subscriber system running... Press Ctrl+C to shutdown gracefully");
-
-    // Wait for shutdown signal
-    let _ = shutdown_handle.await;
-
-    info!("🛑 Shutdown signal received, stopping all subscribers...");
-
-    // Give tasks time to finish gracefully
-    let shutdown_timeout = Duration::from_secs(config.shutdown.timeout_secs as u64);
-    let mut shutdown_count = 0;
-    let total_subscribers = subscriber_tasks.len();
-
-    // Wait for all subscriber tasks with timeout
-    let shutdown_start = tokio::time::Instant::now();
-    while !subscriber_tasks.is_empty() && shutdown_start.elapsed() < shutdown_timeout {
-        match tokio::time::timeout(Duration::from_secs(1), subscriber_tasks.join_next()).await {
-            Ok(Some(result)) => {
-                shutdown_count += 1;
-                match result {
-                    Ok(Ok(())) => {
-                        info!(
-                            "✅ Subscriber {}/{} shut down gracefully",
-                            shutdown_count, total_subscribers
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        warn!(
-                            "⚠️ Subscriber {}/{} shut down with error: {}",
-                            shutdown_count, total_subscribers, e
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "⚠️ Subscriber {}/{} join error: {}",
-                            shutdown_count, total_subscribers, e
-                        );
-                    }
-                }
-            }
-            Ok(None) => break, // No more tasks
-            Err(_) => {
-                // Timeout waiting for next task - continue checking
-                continue;
-            }
-        }
-    }
-
-    // Abort any remaining tasks
-    if !subscriber_tasks.is_empty() {
-        warn!(
-            "⏰ Shutdown timeout reached, force stopping {} remaining subscribers",
-            subscriber_tasks.len()
-        );
-        subscriber_tasks.abort_all();
-        while let Some(result) = subscriber_tasks.join_next().await {
-            if let Err(e) = result {
-                if !e.is_cancelled() {
-                    warn!("Force-stopped subscriber error: {}", e);
-                }
-            }
-        }
-    }
-
-    // Clean disconnect of main service
-    if let Err(e) = stomp_service.disconnect().await {
-        warn!("Main service disconnect error: {}", e);
-    }
-
-    info!(
-        "✅ Multi-subscriber application shutdown complete ({} subscribers stopped)",
-        total_subscribers
-    );
-    Ok(())
+    */
 }
 
-/// Setup signal handlers for graceful shutdown
-async fn setup_signal_handlers() {
-    #[cfg(unix)]
-    {
-        use signal::unix::{signal, SignalKind};
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-        let mut sigint =
-            signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
-
-        tokio::select! {
-            _ = sigterm.recv() => {
-                info!("📡 Received SIGTERM - initiating graceful shutdown");
-                request_shutdown();
-            }
-            _ = sigint.recv() => {
-                info!("📡 Received SIGINT (Ctrl+C) - initiating graceful shutdown");
-                request_shutdown();
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        match signal::ctrl_c().await {
-            Ok(()) => {
-                info!("📡 Received Ctrl+C - initiating graceful shutdown");
-                request_shutdown();
-            }
-            Err(err) => {
-                error!("Unable to listen for shutdown signal: {}", err);
-            }
-        }
-    }
-}
-
-/// Request application shutdown
-fn request_shutdown() {
-    SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
-}

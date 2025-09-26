@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
@@ -248,89 +247,9 @@ impl StompService {
         }
     }
 
-    /// Receive messages from a topic with multiple workers based on configuration
+    /// Receive messages from a topic. Simple single-subscription implementation.
+    /// Topics typically don't need scaling like queues, so we keep it simple.
     pub async fn receive_topic<F>(&mut self, topic_name: &str, handler: F) -> Result<()>
-    where
-        F: Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
-    {
-        let worker_count = self.config.get_topic_workers(topic_name);
-        info!(
-            "📥 Starting {} workers for topic: {}",
-            worker_count, topic_name
-        );
-
-        if worker_count == 1 {
-            // Single worker - use direct implementation
-            return self.receive_topic_single_worker(topic_name, handler).await;
-        }
-
-        // Multiple workers - spawn them as separate tasks
-        let mut worker_tasks = JoinSet::new();
-
-        for worker_id in 0..worker_count {
-            let config_clone = self.config.clone();
-            let topic_name = topic_name.to_string();
-            let handler_clone = handler.clone();
-
-            worker_tasks.spawn(async move {
-                let worker_name = format!("{}#{}", topic_name, worker_id + 1);
-                info!("🔄 Starting topic worker: {}", worker_name);
-
-                // Each worker gets its own service instance
-                let mut worker_service = match StompService::new(config_clone).await {
-                    Ok(service) => service,
-                    Err(e) => {
-                        error!("❌ Failed to create worker service {}: {}", worker_name, e);
-                        return Err(e);
-                    }
-                };
-
-                // Start the worker
-                let result = worker_service
-                    .receive_topic_single_worker(&topic_name, handler_clone)
-                    .await;
-
-                match &result {
-                    Ok(()) => info!("✅ Topic worker {} finished successfully", worker_name),
-                    Err(e) => error!("❌ Topic worker {} failed: {}", worker_name, e),
-                }
-
-                result
-            });
-        }
-
-        info!(
-            "✅ All {} topic workers spawned for: {}",
-            worker_count, topic_name
-        );
-
-        // Wait for any worker to complete (or fail)
-        while let Some(result) = worker_tasks.join_next().await {
-            match result {
-                Ok(Ok(())) => {
-                    info!("🔄 Topic worker completed successfully");
-                    // Continue waiting for other workers
-                }
-                Ok(Err(e)) => {
-                    warn!("⚠️ Topic worker failed: {}", e);
-                    // For now, continue with other workers
-                    // In production, you might want different error handling
-                }
-                Err(e) => {
-                    error!("❌ Topic worker join error: {}", e);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Receive messages from a topic with a single worker (internal implementation)
-    async fn receive_topic_single_worker<F>(&mut self, topic_name: &str, handler: F) -> Result<()>
     where
         F: Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
             + Send
@@ -502,89 +421,9 @@ impl StompService {
         Ok(())
     }
 
-    /// Receive messages from a queue with multiple workers based on configuration
+    /// Receive messages from a queue. Simple single-subscription implementation.
+    /// Scaling is managed by ConsumerPool, so this always creates exactly one subscription.
     pub async fn receive_queue<F>(&mut self, queue_name: &str, handler: F) -> Result<()>
-    where
-        F: Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
-    {
-        let worker_count = self.config.get_queue_workers(queue_name);
-        info!(
-            "📥 Starting {} workers for queue: {}",
-            worker_count, queue_name
-        );
-
-        if worker_count == 1 {
-            // Single worker - use direct implementation
-            return self.receive_queue_single_worker(queue_name, handler).await;
-        }
-
-        // Multiple workers - spawn them as separate tasks
-        let mut worker_tasks = JoinSet::new();
-
-        for worker_id in 0..worker_count {
-            let config_clone = self.config.clone();
-            let queue_name = queue_name.to_string();
-            let handler_clone = handler.clone();
-
-            worker_tasks.spawn(async move {
-                let worker_name = format!("{}#{}", queue_name, worker_id + 1);
-                info!("🔄 Starting queue worker: {}", worker_name);
-
-                // Each worker gets its own service instance
-                let mut worker_service = match StompService::new(config_clone).await {
-                    Ok(service) => service,
-                    Err(e) => {
-                        error!("❌ Failed to create worker service {}: {}", worker_name, e);
-                        return Err(e);
-                    }
-                };
-
-                // Start the worker
-                let result = worker_service
-                    .receive_queue_single_worker(&queue_name, handler_clone)
-                    .await;
-
-                match &result {
-                    Ok(()) => info!("✅ Queue worker {} finished successfully", worker_name),
-                    Err(e) => error!("❌ Queue worker {} failed: {}", worker_name, e),
-                }
-
-                result
-            });
-        }
-
-        info!(
-            "✅ All {} queue workers spawned for: {}",
-            worker_count, queue_name
-        );
-
-        // Wait for any worker to complete (or fail)
-        while let Some(result) = worker_tasks.join_next().await {
-            match result {
-                Ok(Ok(())) => {
-                    info!("🔄 Queue worker completed successfully");
-                    // Continue waiting for other workers
-                }
-                Ok(Err(e)) => {
-                    warn!("⚠️ Queue worker failed: {}", e);
-                    // For now, continue with other workers
-                    // In production, you might want different error handling
-                }
-                Err(e) => {
-                    error!("❌ Queue worker join error: {}", e);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Receive messages from a queue with a single worker (internal implementation)
-    async fn receive_queue_single_worker<F>(&mut self, queue_name: &str, handler: F) -> Result<()>
     where
         F: Fn(String) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
             + Send
@@ -1062,8 +901,6 @@ mod tests {
             },
             consumers: ConsumersConfig {
                 ack_mode: "client_individual".to_string(),
-                workers_per_queue: HashMap::new(),
-                workers_per_topic: HashMap::new(),
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
@@ -1079,6 +916,7 @@ mod tests {
                 max_delay_ms: 1000,
                 backoff_multiplier: 2.0,
             },
+            monitoring: None,
         }
     }
 }
