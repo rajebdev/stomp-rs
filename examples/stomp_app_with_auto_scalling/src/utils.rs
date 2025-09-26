@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::config::Config;
 use crate::service::StompService;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tokio::signal;
 use tokio::time::{sleep, Duration};
 use std::collections::HashMap;
@@ -73,7 +73,7 @@ pub async fn send_test_messages(config: &Config) {
     // Wait a bit before starting message sending
     sleep(Duration::from_secs(2)).await;
 
-    info!("📤 Sending test messages...");
+    debug!("📤 Sending test messages...");
 
     // Create STOMP service for sending messages
     if let Ok(mut stomp_service) = StompService::new(config.clone()).await {
@@ -122,7 +122,7 @@ pub async fn send_test_messages(config: &Config) {
             sleep(Duration::from_millis(100)).await;
         }
 
-        info!("✅ Test messages sent successfully");
+        debug!("✅ Test messages sent successfully");
         
         // Clean disconnect
         if let Err(e) = stomp_service.disconnect().await {

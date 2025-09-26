@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Type alias for handler functions
 pub type HandlerFn = fn(String) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -22,14 +22,14 @@ impl MessageHandlers {
     pub async fn topic_handler(msg: String) -> Result<()> {
         let start_time = Instant::now();
 
-        info!("📢 Processing topic message: {}", msg);
+        debug!("📢 Processing topic message: {}", msg);
 
         // Simulate some processing work
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Log successful processing
         let processing_time = start_time.elapsed();
-        info!(
+        debug!(
             "✅ Topic message processed successfully in {}ms",
             processing_time.as_millis()
         );
@@ -42,14 +42,14 @@ impl MessageHandlers {
     pub async fn queue_handler(msg: String) -> Result<()> {
         let start_time = Instant::now();
 
-        info!("📬 Processing queue message: {}", msg);
+        debug!("📬 Processing queue message: {}", msg);
 
         // Simulate some processing work
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Log successful processing
         let processing_time = start_time.elapsed();
-        info!(
+        debug!(
             "✅ Queue message processed successfully in {}ms",
             processing_time.as_millis()
         );
@@ -88,7 +88,7 @@ impl CustomHandlers {
 
     /// Custom topic handler with specific business logic
     pub async fn custom_topic_handler(&self, msg: &str) -> Result<()> {
-        info!(
+        debug!(
             "🎯 [{}] Custom topic handler processing: {}",
             self.name,
             msg.chars().take(50).collect::<String>()
@@ -97,7 +97,7 @@ impl CustomHandlers {
         // Custom business logic here
         match self.process_topic_message(msg).await {
             Ok(_) => {
-                info!("🎉 [{}] Custom topic processing completed", self.name);
+                debug!("🎉 [{}] Custom topic processing completed", self.name);
                 Ok(())
             }
             Err(e) => {
@@ -109,7 +109,7 @@ impl CustomHandlers {
 
     /// Custom queue handler with specific business logic
     pub async fn custom_queue_handler(&self, msg: &str) -> Result<()> {
-        info!(
+        debug!(
             "🎯 [{}] Custom queue handler processing: {}",
             self.name,
             msg.chars().take(50).collect::<String>()
@@ -118,7 +118,7 @@ impl CustomHandlers {
         // Custom business logic here
         match self.process_queue_message(msg).await {
             Ok(_) => {
-                info!("🎉 [{}] Custom queue processing completed", self.name);
+                debug!("🎉 [{}] Custom queue processing completed", self.name);
                 Ok(())
             }
             Err(e) => {

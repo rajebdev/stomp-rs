@@ -6,7 +6,7 @@ use std::future::Future;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::service::StompService;
@@ -135,13 +135,13 @@ impl StompRunner {
             .any(|q| config.get_auto_scaling_queues().contains(&q.name));
         
         if monitoring_enabled && (has_auto_scaling_queues || has_custom_handlers_for_auto_scaling) {
-            info!("🎯 Auto-scaling is ENABLED");
+            info!("Starting with auto-scaling mode enabled");
             self.run_with_auto_scaling(config).await
         } else {
             if config.is_monitoring_configured() && !monitoring_enabled {
-                info!("📊 Monitoring is DISABLED, using minimum worker counts for all queues");
+                info!("Monitoring disabled, using minimum worker counts");
             } else {
-                info!("📊 Auto-scaling is DISABLED, using static worker configuration");
+                info!("Starting with static worker mode");
             }
             self.run_static_workers(config).await
         }
@@ -149,7 +149,7 @@ impl StompRunner {
 
     /// Run with auto-scaling enabled
     async fn run_with_auto_scaling(self, config: Config) -> Result<()> {
-        info!("🎯 Starting application with auto-scaling mode");
+        debug!("Initializing auto-scaling system");
 
         // Create shutdown broadcast channel
         let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
@@ -169,7 +169,7 @@ impl StompRunner {
         }
 
         if !consumer_pools.is_empty() {
-            info!("✅ All consumer pools initialized");
+            debug!("Consumer pools initialized for {} queues", consumer_pools.len());
         }
 
         // Handle topics with static workers (if any)
@@ -188,7 +188,7 @@ impl StompRunner {
         // Start auto-scaler in background
         let autoscaler_handle = self.start_autoscaler(autoscaler).await;
 
-        info!("🔄 Auto-scaling system running... Press Ctrl+C to shutdown gracefully");
+        info!("STOMP service started successfully");
 
         // Wait for shutdown and cleanup
         self.shutdown_hybrid_system(shutdown_handle, autoscaler_handle, topic_tasks, subscriber_tasks).await
@@ -196,7 +196,7 @@ impl StompRunner {
 
     /// Run with static workers
     async fn run_static_workers(self, config: Config) -> Result<()> {
-        info!("📊 Starting application with static worker mode");
+        debug!("Initializing static worker system");
         
         // Create shutdown broadcast channel
         let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
@@ -211,17 +211,17 @@ impl StompRunner {
         let shutdown_handle = self.setup_shutdown_handler(shutdown_tx.clone());
 
 
-        info!("🔄 Static worker system running... Press Ctrl+C to shutdown gracefully");
+        info!("STOMP service started successfully");
 
         // Wait for shutdown signal
         let _ = shutdown_handle.await;
 
-        info!("🛑 Shutdown signal received, stopping all subscribers...");
+        info!("Shutdown signal received, stopping all subscribers...");
 
         // Shutdown static workers gracefully
         self.shutdown_static_workers(subscriber_tasks, &config).await;
 
-        info!("✅ Static worker application shutdown complete");
+        info!("STOMP service shutdown complete");
         Ok(())
     }
 
@@ -264,16 +264,16 @@ impl StompRunner {
 
         for queue_name in &all_auto_queues {
             if let Some(worker_range) = config.get_queue_worker_range(queue_name) {
-                info!(
-                    "🏊 Creating consumer pool for '{}' (workers: {}-{})",
-                    queue_name, worker_range.min, worker_range.max
-                );
+            debug!(
+                "🏊 Creating consumer pool for '{}' (workers: {}-{})",
+                queue_name, worker_range.min, worker_range.max
+            );
 
                 // Use custom handler if provided, otherwise skip this queue
                 let handler = if let Some(custom_handler) = self.auto_scale_handlers.get(queue_name) {
                     self.create_custom_queue_message_handler(queue_name.clone(), custom_handler.clone())
                 } else {
-                    info!("No custom handler configured for auto-scaling queue '{}', skipping", queue_name);
+                    debug!("No custom handler configured for auto-scaling queue '{}', skipping", queue_name);
                     continue;
                 };
                 
@@ -323,7 +323,7 @@ impl StompRunner {
         }
         
         for topic_name in all_topics {
-            info!(
+            debug!(
                 "📊 Topic '{}' configured with 1 static worker",
                 topic_name
             );
@@ -345,7 +345,7 @@ impl StompRunner {
                     service.receive_topic(&topic_name_clone, move |msg| handler(msg)).await
                 } else {
                     // No handler configured - skip this topic
-                    info!("No handler configured for topic '{}', skipping", topic_name_clone);
+                    debug!("No handler configured for topic '{}', skipping", topic_name_clone);
                     Ok(())
                 }
             });
@@ -379,7 +379,7 @@ impl StompRunner {
                 .map(|range| range.min)
                 .unwrap_or(1);
             
-            info!(
+            debug!(
                 "📊 Fixed worker queue '{}' configured with {} worker(s)",
                 queue_name, worker_count
             );
@@ -505,7 +505,7 @@ impl StompRunner {
                 .map(|range| range.min)
                 .unwrap_or(1);
             
-            info!(
+            debug!(
                 "📊 Queue '{}' configured with {} worker(s)",
                 queue_name, worker_count
             );
@@ -532,16 +532,16 @@ impl StompRunner {
                     let mut service = StompService::new(config_clone).await?;
                     
                     if let Some(handler) = custom_handler_clone {
-                        info!("👥 Starting static worker {} for queue '{}' (fixed worker mode)", worker_id + 1, queue_name_clone);
+                        debug!("👥 Starting static worker {} for queue '{}' (fixed worker mode)", worker_id + 1, queue_name_clone);
                         
                         // Add a small delay to allow connection to fully establish before subscription
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         
-                        info!("🔗 Worker {} connecting to queue '{}'", worker_id + 1, queue_name_clone);
+                        debug!("🔗 Worker {} connecting to queue '{}'", worker_id + 1, queue_name_clone);
                         service.receive_queue(&queue_name_clone, move |msg| handler(msg)).await
                     } else {
                         // No handler configured - skip this queue
-                        info!("No handler configured for queue '{}', skipping", queue_name_clone);
+                        debug!("No handler configured for queue '{}', skipping", queue_name_clone);
                         Ok(())
                     }
                 });
@@ -550,7 +550,7 @@ impl StompRunner {
 
         // Start subscribers for each topic
         for topic_name in all_topics {
-            info!(
+            debug!(
                 "📊 Topic '{}' configured with 1 static worker",
                 topic_name
             );
@@ -572,7 +572,7 @@ impl StompRunner {
                     service.receive_topic(&topic_name_clone, move |msg| handler(msg)).await
                 } else {
                     // No handler configured - skip this topic
-                    info!("No handler configured for topic '{}', skipping", topic_name_clone);
+                    debug!("No handler configured for topic '{}', skipping", topic_name_clone);
                     Ok(())
                 }
             });

@@ -159,7 +159,7 @@ impl ScalingEngine {
     ) -> ScalingDecision {
         let queue_size = metrics.queue_size;
 
-        info!(
+        debug!(
             "🔍 Evaluating scaling for '{}': queue_size={}, workers={}, range={}-{}, activemq_consumers={}",
             queue_name, queue_size, current_workers, worker_range.min, worker_range.max, metrics.consumer_count
         );
@@ -172,7 +172,7 @@ impl ScalingEngine {
             let scale_up_count = needed_workers.min(max_increase);
 
             if scale_up_count > 0 {
-                info!(
+                debug!(
                     "📈 Scale up trigger: queue '{}' has {} messages but only {} workers",
                     queue_name, queue_size, current_workers
                 );
@@ -182,8 +182,8 @@ impl ScalingEngine {
 
         // **Scale Down Logic**
         // Scale down if queue size < current workers AND we have more than min workers
-        info!(
-            "🔷 Scale down check: queue_size({}) < workers({})? {} AND workers({}) > min({})? {}",
+        debug!(
+            "📷 Scale down check: queue_size({}) < workers({})? {} AND workers({}) > min({})? {}",
             queue_size, current_workers, queue_size < current_workers,
             current_workers, worker_range.min, current_workers > worker_range.min
         );
@@ -192,33 +192,33 @@ impl ScalingEngine {
             // Calculate needed workers: queue_size + buffer, but not less than min
             let needed_workers = (queue_size + self.scale_down_buffer).max(worker_range.min);
             
-            info!(
+            debug!(
                 "🗺 Scale down calculation: needed_workers = max({} + {}, {}) = {}",
                 queue_size, self.scale_down_buffer, worker_range.min, needed_workers
             );
             
             if needed_workers < current_workers {
                 let scale_down_count = current_workers.saturating_sub(needed_workers);
-                info!(
+                debug!(
                     "📉 Scale down trigger: queue '{}' has {} messages with {} workers, scaling down to {}",
                     queue_name, queue_size, current_workers, needed_workers
                 );
                 return ScalingDecision::ScaleDown(scale_down_count);
             } else {
-                info!(
+                debug!(
                     "🚫 Scale down blocked: needed_workers({}) >= current_workers({})",
                     needed_workers, current_workers
                 );
             }
         } else {
-            info!(
+            debug!(
                 "🚫 Scale down conditions not met: queue_size({}) < workers({})? {} AND workers({}) > min({})? {}",
                 queue_size, current_workers, queue_size < current_workers,
                 current_workers, worker_range.min, current_workers > worker_range.min
             );
         }
 
-        info!("🔴 No scaling action needed for queue '{}'", queue_name);
+        debug!("🔴 No scaling action needed for queue '{}'", queue_name);
         ScalingDecision::NoChange
     }
 

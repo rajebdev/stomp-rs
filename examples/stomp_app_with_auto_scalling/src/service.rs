@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,7 +59,7 @@ pub struct StompService {
 impl StompService {
     /// Create a new STOMP service instance
     pub async fn new(config: Config) -> Result<Self> {
-        info!("🚀 Initializing STOMP service: {}", config.service.name);
+        debug!("Initializing STOMP service: {}", config.service.name);
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
@@ -77,8 +76,8 @@ impl StompService {
     /// Connect to the STOMP broker using the simplified pattern from reference
     pub async fn connect(&mut self) -> Result<()> {
         let (send_heartbeat, recv_heartbeat) = self.config.get_heartbeat_ms();
-        info!(
-            "🔗 Connecting to STOMP broker at {}:{}",
+        debug!(
+            "Connecting to STOMP broker at {}:{}",
             self.config.broker.host, self.config.broker.port
         );
 
@@ -91,7 +90,7 @@ impl StompService {
         if let Some((username, password)) = self.config.get_credentials() {
             session_builder =
                 session_builder.with(WithCredentials(Credentials(&username, &password)));
-            info!("🔐 Using credentials: {}", username);
+            debug!("Using credentials for user: {}", username);
         }
 
         // Add client ID header
@@ -111,10 +110,8 @@ impl StompService {
 
         self.session = Some(session);
         self.is_connected.store(true, Ordering::Relaxed);
-        info!(
-            "✅ Successfully connected to STOMP broker with client-id: {}",
-            client_id
-        );
+        info!("Connected to STOMP broker {}:{}", self.config.broker.host, self.config.broker.port);
+        debug!("Connection established with client-id: {}", client_id);
 
         Ok(())
     }
@@ -145,7 +142,7 @@ impl StompService {
             format!("/topic/{}", topic_name)
         };
 
-        info!("📤 Sending message to topic: {}", destination);
+        debug!("Sending message to topic: {}", destination);
 
         // Send message using comprehensive header support API with fluent chaining
         let mut message_builder = session.message(&destination, payload)
@@ -158,14 +155,14 @@ impl StompService {
                 if let Ok(priority) = priority_str.parse::<u8>() {
                     let clamped_priority = priority.clamp(0, 9);
                     message_builder = message_builder.add_header("JMSPriority", &clamped_priority.to_string());
-                    info!("📋 Setting topic message priority: {}", clamped_priority);
+                    debug!("Setting topic message priority: {}", clamped_priority);
                 }
             }
 
             // Check if we have content-type override
             if let Some(content_type) = headers.get("content-type") {
                 message_builder = message_builder.with_content_type(content_type);
-                info!("📄 Setting content-type: {}", content_type);
+                debug!("Setting content-type: {}", content_type);
             }
 
             // Add remaining custom headers
@@ -173,7 +170,7 @@ impl StompService {
             for (key, value) in &headers {
                 if !processed_headers.contains(&key.as_str()) {
                     message_builder = message_builder.add_header(key, value);
-                    info!("🏷️ Adding custom topic header: {} = {}", key, value);
+                    trace!("Adding custom topic header: {} = {}", key, value);
                 }
             }
         }
@@ -181,11 +178,11 @@ impl StompService {
         // Send message and handle result with match
         match message_builder.send().await {
             Ok(_) => {
-                info!("✅ Message sent successfully to topic: {}", destination);
+                debug!("Message sent successfully to topic: {}", destination);
                 Ok(())
             }
             Err(e) => {
-                error!("❌ Failed to send message to topic {}: {}", destination, e);
+                error!("Failed to send message to topic {}: {}", destination, e);
                 Err(anyhow::anyhow!("Failed to send message to topic: {}", e))
             }
         }
@@ -217,7 +214,7 @@ impl StompService {
             format!("/queue/{}", queue_name)
         };
 
-        info!("📤 Sending message to queue: {}", destination);
+        debug!("Sending message to queue: {}", destination);
 
         // Send message using comprehensive header support API with advanced features
         let mut message_builder = session.message(&destination, payload)
@@ -232,7 +229,7 @@ impl StompService {
                     let clamped_priority = priority.clamp(0, 9);
                     // Use JMSPriority header for ActiveMQ compatibility
                     message_builder = message_builder.add_header("JMSPriority", &clamped_priority.to_string());
-                    info!("📋 Setting message priority: {}", clamped_priority);
+                    debug!("Setting message priority: {}", clamped_priority);
                 }
             }
 
@@ -243,17 +240,17 @@ impl StompService {
                         // Persistent delivery (messages survive broker restart)
                         // Use JMSDeliveryMode: 2 = PERSISTENT, 1 = NON_PERSISTENT
                         message_builder = message_builder.add_header("JMSDeliveryMode", "2");
-                        info!("💾 Setting persistent delivery mode");
+                        debug!("Setting persistent delivery mode");
                     }
                     "false" | "0" | "no" => {
                         // Non-persistent delivery (faster but messages lost on broker restart)
                         message_builder = message_builder.add_header("JMSDeliveryMode", "1");
-                        info!("🚀 Setting non-persistent delivery mode");
+                        debug!("Setting non-persistent delivery mode");
                     }
                     _ => {
                         // Invalid value, default to persistent for safety
                         message_builder = message_builder.add_header("JMSDeliveryMode", "2");
-                        info!("💾 Invalid persistent value '{}', defaulting to persistent", persistent_str);
+                        warn!("Invalid persistent value '{}', defaulting to persistent", persistent_str);
                     }
                 }
             }
@@ -264,14 +261,14 @@ impl StompService {
                     // Use JMSExpiration header for ActiveMQ compatibility
                     let expiry_time = chrono::Utc::now().timestamp_millis() as u64 + ttl_ms;
                     message_builder = message_builder.add_header("JMSExpiration", &expiry_time.to_string());
-                    info!("⏰ Setting message TTL: {}ms (expires at: {})", ttl_ms, expiry_time);
+                    debug!("Setting message TTL: {}ms (expires at: {})", ttl_ms, expiry_time);
                 }
             }
 
             // Check if we have content-type override
             if let Some(content_type) = headers.get("content-type") {
                 message_builder = message_builder.with_content_type(content_type);
-                info!("📄 Setting content-type: {}", content_type);
+                debug!("Setting content-type: {}", content_type);
             }
 
             // Add remaining custom headers (excluding ones we already processed)
@@ -279,7 +276,7 @@ impl StompService {
             for (key, value) in &headers {
                 if !processed_headers.contains(&key.as_str()) {
                     message_builder = message_builder.add_header(key, value);
-                    info!("🏷️ Adding custom header: {} = {}", key, value);
+                    trace!("Adding custom header: {} = {}", key, value);
                 }
             }
         }
@@ -289,11 +286,11 @@ impl StompService {
         // Send message and handle result with match
         match message_builder.send().await {
             Ok(_) => {
-                info!("✅ Message sent successfully to queue: {}", destination);
+                debug!("Message sent successfully to queue: {}", destination);
                 Ok(())
             }
             Err(e) => {
-                error!("❌ Failed to send message to queue {}: {}", destination, e);
+                error!("Failed to send message to queue {}: {}", destination, e);
                 Err(anyhow::anyhow!("Failed to send message to queue: {}", e))
             }
         }
@@ -317,7 +314,7 @@ impl StompService {
             format!("/topic/{}", topic_name)
         };
 
-        info!("📥 Starting topic worker for: {}", topic_path);
+        debug!("Starting topic worker for: {}", topic_path);
 
         // Main reconnection loop
         loop {
@@ -325,16 +322,10 @@ impl StompService {
             if !self.is_healthy() {
                 match self.reconnect().await {
                     Ok(()) => {
-                        info!(
-                            "✅ Successfully connected/reconnected to topic: {}",
-                            topic_path
-                        );
+                        debug!("Successfully connected/reconnected to topic: {}", topic_path);
                     }
                     Err(e) => {
-                        error!(
-                            "❌ Failed to connect/reconnect to topic {}: {}",
-                            topic_path, e
-                        );
+                        error!("Failed to connect/reconnect to topic {}: {}", topic_path, e);
                         return Err(e);
                     }
                 }
@@ -364,7 +355,7 @@ impl StompService {
             while let Some(event) = session.next_event().await {
                 match event {
                     SessionEvent::Connected => {
-                        info!("✅ Connected to STOMP broker for topic subscription");
+                        debug!("Connected to STOMP broker for topic subscription");
 
                         let subscription_id = session
                             .subscription(&topic_path)
@@ -372,10 +363,7 @@ impl StompService {
                             .start()
                             .await?;
 
-                        info!(
-                            "📬 Subscribed to topic: {} (ID: {})",
-                            topic_path, subscription_id
-                        );
+                        info!("Subscribed to topic: {} (ID: {})", topic_path, subscription_id);
                         connected = true;
                     }
 
@@ -398,8 +386,8 @@ impl StompService {
                             .map(|h| h.1.as_str())
                             .unwrap_or("unknown");
 
-                        info!(
-                            "📨 Received topic message from {}: {} (ID: {})",
+                        debug!(
+                            "Received topic message from {}: {} (ID: {})",
                             destination,
                             body_str.chars().take(50).collect::<String>(),
                             message_id
@@ -420,13 +408,13 @@ impl StompService {
                                 }
                             }
                             Err(e) => {
-                                error!("❌ Topic message processing failed: {}", e);
+                                error!("Topic message processing failed: {}", e);
 
                                 // Negative acknowledge (NACK) the message
                                 if let Err(nack_err) =
                                     session.acknowledge_frame(&frame, AckOrNack::Nack).await
                                 {
-                                    error!("❌ Failed to NACK topic message: {}", nack_err);
+                                    error!("Failed to NACK topic message: {}", nack_err);
                                 }
                             }
                         }
@@ -437,14 +425,14 @@ impl StompService {
                     }
 
                     SessionEvent::ErrorFrame(frame) => {
-                        error!("❌ Error frame received: {:?}", frame);
+                        error!("Error frame received: {:?}", frame);
                         self.mark_unhealthy();
                         should_reconnect = true;
                         break;
                     }
 
                     SessionEvent::Disconnected(reason) => {
-                        warn!("🔌 Session disconnected: {:?}", reason);
+                        warn!("Session disconnected: {:?}", reason);
                         self.mark_unhealthy();
                         should_reconnect = true;
                         break;
@@ -461,10 +449,7 @@ impl StompService {
                 self.session = Some(session);
                 break;
             } else {
-                info!(
-                    "🔄 Connection lost for topic {}, will attempt reconnection...",
-                    topic_path
-                );
+                debug!("Connection lost for topic {}, will attempt reconnection...", topic_path);
                 // Session will be recreated on next iteration
                 sleep(Duration::from_millis(1000)).await; // Brief pause before reconnecting
             }
@@ -491,7 +476,7 @@ impl StompService {
             format!("/queue/{}", queue_name)
         };
 
-        info!("📥 Starting queue worker for: {}", queue_path);
+        debug!("Starting queue worker for: {}", queue_path);
 
         // Main reconnection loop
         loop {
@@ -499,16 +484,10 @@ impl StompService {
             if !self.is_healthy() {
                 match self.reconnect().await {
                     Ok(()) => {
-                        info!(
-                            "✅ Successfully connected/reconnected to queue: {}",
-                            queue_path
-                        );
+                        debug!("Successfully connected/reconnected to queue: {}", queue_path);
                     }
                     Err(e) => {
-                        error!(
-                            "❌ Failed to connect/reconnect to queue {}: {}",
-                            queue_path, e
-                        );
+                        error!("Failed to connect/reconnect to queue {}: {}", queue_path, e);
                         return Err(e);
                     }
                 }
@@ -538,7 +517,7 @@ impl StompService {
             while let Some(event) = session.next_event().await {
                 match event {
                     SessionEvent::Connected => {
-                        info!("✅ Connected to STOMP broker for queue subscription");
+                        debug!("Connected to STOMP broker for queue subscription");
 
                         let subscription_id = session
                             .subscription(&queue_path)
@@ -546,10 +525,7 @@ impl StompService {
                             .start()
                             .await?;
 
-                        info!(
-                            "📬 Successfully subscribed to queue: {} (ID: {}) - Consumer should now be visible in ActiveMQ",
-                            queue_path, subscription_id
-                        );
+                        info!("Subscribed to queue: {} (ID: {})", queue_path, subscription_id);
                         connected = true;
                     }
 
@@ -572,8 +548,8 @@ impl StompService {
                             .map(|h| h.1.as_str())
                             .unwrap_or("unknown");
 
-                        info!(
-                            "📨 Received queue message from {}: {} (ID: {})",
+                        debug!(
+                            "Received queue message from {}: {} (ID: {})",
                             destination,
                             body_str.chars().take(50).collect::<String>(),
                             message_id
@@ -594,13 +570,13 @@ impl StompService {
                                 }
                             }
                             Err(e) => {
-                                error!("❌ Queue message processing failed: {}", e);
+                                error!("Queue message processing failed: {}", e);
 
                                 // Negative acknowledge (NACK) the message
                                 if let Err(nack_err) =
                                     session.acknowledge_frame(&frame, AckOrNack::Nack).await
                                 {
-                                    error!("❌ Failed to NACK queue message: {}", nack_err);
+                                    error!("Failed to NACK queue message: {}", nack_err);
                                 }
                             }
                         }
@@ -611,14 +587,14 @@ impl StompService {
                     }
 
                     SessionEvent::ErrorFrame(frame) => {
-                        error!("❌ Error frame received: {:?}", frame);
+                        error!("Error frame received: {:?}", frame);
                         self.mark_unhealthy();
                         should_reconnect = true;
                         break;
                     }
 
                     SessionEvent::Disconnected(reason) => {
-                        warn!("🔌 Session disconnected: {:?}", reason);
+                        warn!("Session disconnected: {:?}", reason);
                         self.mark_unhealthy();
                         should_reconnect = true;
                         break;
@@ -635,10 +611,7 @@ impl StompService {
                 self.session = Some(session);
                 break;
             } else {
-                info!(
-                    "🔄 Connection lost for queue {}, will attempt reconnection...",
-                    queue_path
-                );
+                debug!("Connection lost for queue {}, will attempt reconnection...", queue_path);
                 // Session will be recreated on next iteration
                 sleep(Duration::from_millis(1000)).await; // Brief pause before reconnecting
             }
@@ -650,12 +623,12 @@ impl StompService {
     /// Disconnect from the STOMP broker
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(mut session) = self.session.take() {
-            info!("👋 Disconnecting from STOMP broker");
+            debug!("Disconnecting from STOMP broker");
 
             if let Err(e) = session.disconnect().await {
-                warn!("⚠️ Disconnect error: {}", e);
+                warn!("Disconnect error: {}", e);
             } else {
-                info!("✅ Disconnected gracefully from STOMP broker");
+                debug!("Disconnected gracefully from STOMP broker");
             }
         }
 
@@ -689,7 +662,7 @@ impl StompService {
     /// Mark connection as unhealthy
     fn mark_unhealthy(&self) {
         self.is_connected.store(false, Ordering::Relaxed);
-        warn!("🔴 Connection marked as unhealthy");
+        warn!("Connection marked as unhealthy");
     }
 
     /// Determine if an error is temporary and retryable
@@ -729,13 +702,13 @@ impl StompService {
 
             let delay = retry_config.calculate_delay(attempt);
             if retry_config.max_attempts < 0 {
-                info!(
+                debug!(
                     "🔁 Reconnection attempt {} (infinite retries) in {}ms",
                     attempt + 1,
                     delay.as_millis()
                 );
             } else {
-                info!(
+                debug!(
                     "🔁 Reconnection attempt {} of {} in {}ms",
                     attempt + 1,
                     retry_config.max_attempts,
@@ -801,14 +774,14 @@ impl StompService {
         };
 
         if subscriptions.is_empty() {
-            info!("📝 No previous subscriptions to restore");
+            debug!("📏 No previous subscriptions to restore");
             return Ok(());
         }
 
         info!("🔄 Resubscribing to {} destinations", subscriptions.len());
 
         for destination in subscriptions {
-            info!("🔄 Resubscribing to: {}", destination);
+            debug!("🔄 Resubscribing to: {}", destination);
             // Note: The actual resubscription logic will be handled by the
             // individual receive_topic/receive_queue methods when they detect
             // a reconnection has occurred

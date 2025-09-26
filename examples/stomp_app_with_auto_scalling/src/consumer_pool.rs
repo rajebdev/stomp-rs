@@ -106,7 +106,7 @@ impl ConsumerPool {
     /// Spawn a new worker for this queue
     pub async fn spawn_worker(&self) -> Result<String> {
         let worker_id = format!("{}#{}", self.queue_name, Uuid::new_v4());
-        info!("🔄 Spawning worker: {}", worker_id);
+        debug!("🔄 Spawning worker: {}", worker_id);
 
         // Create shutdown channel for this worker
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -133,7 +133,7 @@ impl ConsumerPool {
         let mut workers = self.workers.lock().await;
         workers.push(worker_info);
 
-        info!("✅ Worker '{}' spawned successfully", worker_id);
+        debug!("✅ Worker '{}' spawned successfully", worker_id);
         Ok(worker_id)
     }
 
@@ -151,7 +151,7 @@ impl ConsumerPool {
         let worker = workers.pop().unwrap();
         drop(workers); // Release lock early
 
-        info!("🛑 Stopping worker: {}", worker.id);
+        debug!("🛑 Stopping worker: {}", worker.id);
 
         // Send shutdown signal to the worker
         let _ = worker.shutdown_tx.send(());
@@ -160,7 +160,7 @@ impl ConsumerPool {
         let timeout_duration = tokio::time::Duration::from_secs(10);
         match tokio::time::timeout(timeout_duration, worker.handle).await {
             Ok(Ok(_)) => {
-                info!("✅ Worker '{}' stopped gracefully", worker.id);
+                debug!("✅ Worker '{}' stopped gracefully", worker.id);
             }
             Ok(Err(e)) => {
                 warn!("⚠️ Worker '{}' stopped with error: {}", worker.id, e);
@@ -253,7 +253,7 @@ impl ConsumerPool {
         handler: Arc<Box<MessageHandler>>,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<()> {
-        info!("🔄 Worker '{}' starting for queue '{}'", worker_id, queue_name);
+        debug!("🔄 Worker '{}' starting for queue '{}'", worker_id, queue_name);
 
         // Create STOMP service for this worker
         let mut service = StompService::new(config).await?;
@@ -281,13 +281,13 @@ impl ConsumerPool {
         tokio::select! {
             result = service.receive_queue(&queue_name, worker_handler) => {
                 match &result {
-                    Ok(_) => info!("✅ Worker '{}' completed normally", worker_id),
+                    Ok(_) => debug!("✅ Worker '{}' completed normally", worker_id),
                     Err(e) => error!("❌ Worker '{}' failed: {}", worker_id, e),
                 }
                 result
             }
             _ = shutdown_rx.recv() => {
-                info!("🛑 Worker '{}' received shutdown signal", worker_id);
+                debug!("🛑 Worker '{}' received shutdown signal", worker_id);
                 if let Err(e) = service.disconnect().await {
                     warn!("Worker '{}' disconnect error: {}", worker_id, e);
                 }
@@ -306,11 +306,11 @@ impl ConsumerPool {
         };
 
         if workers.is_empty() {
-            info!("No workers to stop for queue '{}'", self.queue_name);
+            debug!("No workers to stop for queue '{}'", self.queue_name);
             return Ok(());
         }
 
-        info!("Stopping {} workers for queue '{}'", workers.len(), self.queue_name);
+        debug!("Stopping {} workers for queue '{}'", workers.len(), self.queue_name);
 
         // Send shutdown signals to all workers
         for worker in &workers {

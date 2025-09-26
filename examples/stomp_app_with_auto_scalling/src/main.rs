@@ -1,11 +1,11 @@
 use anyhow::Result;
 use stomp_app_with_auto_scalling::runner::StompRunner;
 use stomp_app_with_auto_scalling::utils;
-use tracing::info;
+use tracing::debug;
 
 // Custom handler for processing order messages
 async fn handle_order_message(message: String) -> Result<()> {
-    info!("🛒 Processing ORDER: {}", message);
+    debug!("🛒 Processing ORDER: {}", message);
     // Simulate some processing time
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     Ok(())
@@ -13,7 +13,7 @@ async fn handle_order_message(message: String) -> Result<()> {
 
 // Custom handler for processing notification messages
 async fn handle_notification_message(message: String) -> Result<()> {
-    info!("🔔 Processing NOTIFICATION: {}", message);
+    debug!("🔔 Processing NOTIFICATION: {}", message);
     // Simulate some processing time
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     Ok(())
@@ -21,7 +21,7 @@ async fn handle_notification_message(message: String) -> Result<()> {
 
 // Custom handler for processing API request messages
 async fn handle_api_request_message(message: String) -> Result<()> {
-    info!("🌐 Processing API REQUEST: {}", message);
+    debug!("🌐 Processing API REQUEST: {}", message);
     // Simulate API processing
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     Ok(())
@@ -29,7 +29,7 @@ async fn handle_api_request_message(message: String) -> Result<()> {
 
 // Custom handler for processing general messages
 async fn handle_general_message(message: String) -> Result<()> {
-    info!("🛒 Processing GENERAL: {}", message);
+    debug!("🛒 Processing GENERAL: {}", message);
     // Simulate some processing time
     tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
     Ok(())
@@ -89,15 +89,15 @@ async fn main() -> Result<()> {
     StompRunner::new()
         .with_config(config)
         .add_queue("user_events", |msg| async move {
-            info!("👤 User event: {}", msg);
+            debug!("👤 User event: {}", msg);
             Ok(())
         })
         .add_queue("system_logs", |msg| async move {
-            info!("📋 System log: {}", msg);
+            debug!("📋 System log: {}", msg);
             Ok(())
         })
         .add_queue("high_load_queue", |msg| async move {
-            info!("⚡ High load processing: {}", msg);
+            debug!("⚡ High load processing: {}", msg);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             Ok(())
         })

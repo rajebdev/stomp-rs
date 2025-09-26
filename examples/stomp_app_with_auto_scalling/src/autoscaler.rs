@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::{interval, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, WorkerRange};
 use crate::consumer_pool::ConsumerPool;
@@ -137,7 +137,7 @@ impl AutoScaler {
 
     /// Perform one monitoring and scaling cycle
     async fn monitoring_cycle(&mut self) -> Result<()> {
-        info!("🔍 Starting monitoring cycle");
+        debug!("🔍 Starting monitoring cycle");
 
         // Get list of queue config keys to monitor
         let queue_config_keys = {
@@ -150,7 +150,7 @@ impl AutoScaler {
             return Ok(());
         }
 
-        info!("📋 Monitoring {} queues: {:?}", queue_config_keys.len(), queue_config_keys);
+        debug!("📋 Monitoring {} queues: {:?}", queue_config_keys.len(), queue_config_keys);
 
         // Get mapping from config keys to actual ActiveMQ queue names
         let queue_name_mapping = self.config.get_queue_key_to_activemq_name_mapping();
@@ -163,13 +163,13 @@ impl AutoScaler {
             if let Some(activemq_name) = queue_name_mapping.get(config_key) {
                 activemq_queue_names.push(activemq_name.clone());
                 config_key_to_activemq_name.insert(activemq_name.clone(), config_key.clone());
-                info!("🗖 Mapping: '{}' config → '{}' ActiveMQ queue", config_key, activemq_name);
+                debug!("🗺 Mapping: '{}' config → '{}' ActiveMQ queue", config_key, activemq_name);
             } else {
                 error!("❌ No ActiveMQ queue name found for config key '{}'", config_key);
             }
         }
 
-        info!("🚀 Fetching metrics from ActiveMQ API for {} queues", activemq_queue_names.len());
+        debug!("🚀 Fetching metrics from ActiveMQ API for {} queues", activemq_queue_names.len());
         
         // Collect metrics for all queues using actual ActiveMQ names
         let metrics_results = self.monitor.get_multiple_queue_metrics(&activemq_queue_names).await;
@@ -183,7 +183,7 @@ impl AutoScaler {
             if let Some(config_key) = config_key_to_activemq_name.get(&activemq_queue_name) {
                 match metrics_result {
                     Ok(mut metrics) => {
-                        info!(
+                        debug!(
                             "📈 Queue '{}' (ActiveMQ: '{}'): {} messages, {} consumers",
                             config_key, activemq_queue_name, metrics.queue_size, metrics.consumer_count
                         );
@@ -209,7 +209,7 @@ impl AutoScaler {
             }
         }
 
-        info!(
+        debug!(
             "✅ Monitoring cycle completed - Success: {}/{}, Failed: {}", 
             successful_metrics, 
             successful_metrics + failed_metrics,
@@ -232,7 +232,7 @@ impl AutoScaler {
             }
         };
 
-        info!(
+        debug!(
             "🔎 Processing metrics for '{}': queue_size={}, current_workers={}",
             queue_name, metrics.queue_size, current_workers
         );
@@ -245,7 +245,7 @@ impl AutoScaler {
         // Apply the scaling decision
         match decision {
             ScalingDecision::NoChange => {
-                info!("🔴 Queue '{}': No scaling needed ({}msg/{}workers)", 
+                debug!("🔴 Queue '{}': No scaling needed ({}msg/{}workers)", 
                       queue_name, metrics.queue_size, current_workers);
             }
             ScalingDecision::ScaleUp(count) => {
