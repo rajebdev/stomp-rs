@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_queue_registration() {
         let mut engine = ScalingEngine::new(4);
-        let worker_range = WorkerRange { min: 1, max: 4 };
+        let worker_range = WorkerRange { min: 1, max: 4, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 1);
         
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn test_scale_up_decision() {
         let mut engine = ScalingEngine::new(4);
-        let worker_range = WorkerRange { min: 1, max: 4 };
+        let worker_range = WorkerRange { min: 1, max: 4, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 1);
         
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn test_scale_down_decision() {
         let mut engine = ScalingEngine::new(0); // Parameter ignored now
-        let worker_range = WorkerRange { min: 1, max: 4 };
+        let worker_range = WorkerRange { min: 1, max: 4, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 3);
         
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_no_change_decision() {
         let mut engine = ScalingEngine::new(4);
-        let worker_range = WorkerRange { min: 1, max: 4 };
+        let worker_range = WorkerRange { min: 1, max: 4, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 2);
         
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_respect_worker_limits() {
         let mut engine = ScalingEngine::new(4);
-        let worker_range = WorkerRange { min: 1, max: 2 };
+        let worker_range = WorkerRange { min: 1, max: 2, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 2);
         
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn test_cooldown_period() {
         let mut engine = ScalingEngine::new(4);
-        let worker_range = WorkerRange { min: 1, max: 4 };
+        let worker_range = WorkerRange { min: 1, max: 4, is_fixed: false };
         
         engine.register_queue("test".to_string(), worker_range, 1);
         

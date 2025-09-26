@@ -410,13 +410,11 @@ mod tests {
 
     fn create_test_config() -> Config {
         let mut monitoring_config = MonitoringConfig {
+            enable: true,
             activemq: ActiveMQMonitoringConfig {
                 base_url: "http://localhost:8161".to_string(),
                 broker_name: "localhost".to_string(),
-                credentials: Some(CredentialsConfig {
-                    username: "admin".to_string(),
-                    password: "admin".to_string(),
-                }),
+                credentials: None,
             },
             scaling: ScalingConfig {
                 interval_secs: 5,
@@ -427,7 +425,7 @@ mod tests {
         monitoring_config
             .scaling
             .worker_per_queue
-            .insert("test".to_string(), WorkerRange { min: 1, max: 3 });
+            .insert("test".to_string(), "1-3".to_string());
 
         Config {
             service: ServiceConfig {
@@ -487,7 +485,7 @@ mod tests {
         let status = QueueStatus {
             queue_name: "test".to_string(),
             current_workers: 2,
-            worker_range: WorkerRange { min: 1, max: 4 },
+            worker_range: WorkerRange { min: 1, max: 4, is_fixed: false },
             last_queue_size: 5,
             last_consumer_count: 2,
         };

@@ -495,7 +495,7 @@ impl StompService {
                             .await?;
 
                         info!(
-                            "📬 Subscribed to queue: {} (ID: {})",
+                            "📬 Successfully subscribed to queue: {} (ID: {}) - Consumer should now be visible in ActiveMQ",
                             queue_path, subscription_id
                         );
                         connected = true;
@@ -846,7 +846,7 @@ mod tests {
         assert!(infinite_retry_config.should_retry(0));
         assert!(infinite_retry_config.should_retry(100));
         assert!(infinite_retry_config.should_retry(1000000)); // Should always retry with infinite retries
-        assert!(infinite_retry_config.is_infinite_retries());
+        assert!(infinite_retry_config.max_attempts == -1);
     }
 
     #[test]

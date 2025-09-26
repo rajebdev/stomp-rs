@@ -27,6 +27,14 @@ async fn handle_api_request_message(message: String) -> Result<()> {
     Ok(())
 }
 
+// Custom handler for processing general messages
+async fn handle_general_message(message: String) -> Result<()> {
+    info!("🛒 Processing GENERAL: {}", message);
+    // Simulate some processing time
+    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging first
@@ -47,20 +55,24 @@ async fn main() -> Result<()> {
     });
     
     // Example 1: Use configuration with custom handlers
+    // Note: Whether queues use auto-scaling or static workers is determined by config.yaml
     StompRunner::new()
         .with_config(config)
-        .add_queue("orders", handle_order_message)  // Custom handler for orders queue
-        .add_topic("notifications", handle_notification_message)  // Custom handler for notifications topic
-        .add_auto_scaling_queue("api_requests", handle_api_request_message)  // Custom handler for auto-scaling queue
+        .add_queue("default", handle_general_message)  // Handler for default queue
+        .add_queue("errorsx", handle_general_message)  // Handler for errorsx queue
+        .add_queue("modern_major_general_0", handle_general_message)  // Handler for modern_major_general_0 queue
+        .add_queue("api_requests", handle_api_request_message)  // Handler for api_requests queue
+        .add_topic("notifications", handle_notification_message)  // Handler for notifications topic
         .run()
         .await
 
     // Alternative examples (commented out):
     
-    // Example 2: Simple setup with all defaults
+    // Example 2: Simple setup using config file directly in main
     /*
+    let config = utils::load_configuration("config.yaml")?;
     StompRunner::new()
-        .with_config_file("config.yaml")?
+        .with_config(config)
         .run()
         .await
     */
@@ -73,8 +85,9 @@ async fn main() -> Result<()> {
         utils::send_test_messages(&config_for_test).await;
     });
     
+    let config = utils::load_configuration("config.yaml")?;
     StompRunner::new()
-        .with_config_file("config.yaml")?
+        .with_config(config)
         .add_queue("user_events", |msg| async move {
             info!("👤 User event: {}", msg);
             Ok(())
@@ -83,7 +96,7 @@ async fn main() -> Result<()> {
             info!("📋 System log: {}", msg);
             Ok(())
         })
-        .add_auto_scaling_queue("high_load_queue", |msg| async move {
+        .add_queue("high_load_queue", |msg| async move {
             info!("⚡ High load processing: {}", msg);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             Ok(())

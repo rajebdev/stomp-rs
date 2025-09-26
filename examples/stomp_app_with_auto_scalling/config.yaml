@@ -50,8 +50,8 @@ destinations:
         persistent: "true"
     
     # Error handling queue
-    errors:
-      path: "/queue/errors"
+    errorsx:
+      path: "/queue/errorsx"
       headers:
         persistent: "true"
         priority: "high"
@@ -112,6 +112,9 @@ shutdown:
 
 # Auto-scaling monitoring configuration (optional)
 monitoring:
+  # Enable/disable monitoring and auto-scaling
+  enable: true  # Set to false to disable auto-scaling and use min worker counts
+  
   # ActiveMQ management console settings
   activemq:
     base_url: "http://10.0.7.127:8131"  # ActiveMQ management console URL
@@ -124,18 +127,11 @@ monitoring:
   scaling:
     interval_secs: 5                    # Check queue metrics every 5 seconds
     
-    # Queue-specific worker scaling rules: "queue_name: min-max"
+    # Queue-specific worker scaling rules:
+    # Format: "min-max" for auto-scaling (e.g., "1-4") or "count" for fixed workers (e.g., "2")
     # Note: Use the same key names as in destinations.queues section
     worker_per_queue:
-      default:
-        min: 1  
-        max: 4
-      modern_major_general_0:
-        min: 1
-        max: 2
-      api_requests:
-        min: 2
-        max: 6
-      errors:
-        min: 1
-        max: 2
+      default: "1-4"                    # Auto-scaling: 1-4 workers
+      modern_major_general_0: "1-2"     # Auto-scaling: 1-2 workers
+      api_requests: "2-6"               # Auto-scaling: 2-6 workers
+      errorsx: "2"                       # Fixed: 2 workers

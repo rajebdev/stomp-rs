@@ -415,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn test_consumer_pool_creation() {
         let config = create_test_config();
-        let worker_range = WorkerRange { min: 1, max: 3 };
+        let worker_range = WorkerRange { min: 1, max: 3, is_fixed: false };
         let handler = create_test_handler();
         let (_tx, rx) = broadcast::channel(1);
 
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_worker_range() {
-        let range = WorkerRange { min: 2, max: 5 };
+        let range = WorkerRange { min: 2, max: 5, is_fixed: false };
         assert_eq!(range.min, 2);
         assert_eq!(range.max, 5);
     }

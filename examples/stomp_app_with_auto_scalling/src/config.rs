@@ -89,6 +89,9 @@ pub struct ShutdownConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MonitoringConfig {
+    /// Enable/disable monitoring
+    #[serde(default = "default_monitoring_enabled")]
+    pub enable: bool,
     /// ActiveMQ management console configuration
     pub activemq: ActiveMQMonitoringConfig,
     /// Auto-scaling configuration
@@ -111,17 +114,22 @@ pub struct ScalingConfig {
     /// Polling interval in seconds for checking queue metrics
     pub interval_secs: u64,
     /// Queue-specific worker scaling rules
-    pub worker_per_queue: HashMap<String, WorkerRange>,
+    pub worker_per_queue: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct WorkerRange {
     pub min: u32,
     pub max: u32,
+    pub is_fixed: bool,
 }
 
 fn default_broker_name() -> String {
     "localhost".to_string()
+}
+
+fn default_monitoring_enabled() -> bool {
+    true
 }
 
 
@@ -217,18 +225,103 @@ impl Config {
 
     /// Check if auto-scaling is enabled
     pub fn is_auto_scaling_enabled(&self) -> bool {
+        self.monitoring.as_ref().map_or(false, |m| m.enable)
+    }
+    
+    /// Check if monitoring is configured (even if disabled)
+    pub fn is_monitoring_configured(&self) -> bool {
         self.monitoring.is_some()
     }
 
-    /// Get worker range for a specific queue in auto-scaling mode
-    pub fn get_queue_worker_range(&self, queue_name: &str) -> Option<&WorkerRange> {
+    /// Parse worker configuration string (e.g., "1-4" or "2")
+    fn parse_worker_config(config_str: &str) -> Result<WorkerRange> {
+        if config_str.contains('-') {
+            // Range format: "1-4"
+            let parts: Vec<&str> = config_str.split('-').collect();
+            if parts.len() != 2 {
+                return Err(anyhow::anyhow!("Invalid worker range format: {}", config_str));
+            }
+            let min = parts[0].parse::<u32>()
+                .with_context(|| format!("Invalid min worker count: {}", parts[0]))?;
+            let max = parts[1].parse::<u32>()
+                .with_context(|| format!("Invalid max worker count: {}", parts[1]))?;
+            
+            if min > max {
+                return Err(anyhow::anyhow!("Min worker count ({}) cannot be greater than max ({})", min, max));
+            }
+            
+            Ok(WorkerRange { min, max, is_fixed: false })
+        } else {
+            // Fixed count format: "2"
+            let count = config_str.parse::<u32>()
+                .with_context(|| format!("Invalid worker count: {}", config_str))?;
+            Ok(WorkerRange { min: count, max: count, is_fixed: true })
+        }
+    }
+    
+    /// Get worker range for a specific queue
+    pub fn get_queue_worker_range(&self, queue_name: &str) -> Option<WorkerRange> {
         self.monitoring
             .as_ref()
             .and_then(|m| m.scaling.worker_per_queue.get(queue_name))
+            .and_then(|config_str| Self::parse_worker_config(config_str).ok())
+            .map(|mut range| {
+                // If monitoring is disabled, set both min and max to min value
+                if let Some(monitoring) = &self.monitoring {
+                    if !monitoring.enable {
+                        range.max = range.min;
+                        range.is_fixed = true;
+                    }
+                }
+                range
+            })
     }
 
     /// Get all queues configured for auto-scaling
     pub fn get_auto_scaling_queues(&self) -> Vec<String> {
+        self.monitoring
+            .as_ref()
+            .map(|m| {
+                m.scaling.worker_per_queue.keys()
+                    .filter(|queue_name| {
+                        // Only include queues that have range format (e.g., "1-4")
+                        // and monitoring is enabled
+                        if !m.enable {
+                            return false;
+                        }
+                        if let Some(config_str) = m.scaling.worker_per_queue.get(*queue_name) {
+                            config_str.contains('-')
+                        } else {
+                            false
+                        }
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    
+    /// Get all queues configured with fixed worker counts
+    pub fn get_fixed_worker_queues(&self) -> Vec<String> {
+        self.monitoring
+            .as_ref()
+            .map(|m| {
+                m.scaling.worker_per_queue.keys()
+                    .filter(|queue_name| {
+                        if let Some(config_str) = m.scaling.worker_per_queue.get(*queue_name) {
+                            !config_str.contains('-')
+                        } else {
+                            false
+                        }
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    
+    /// Get all configured queue workers (both auto-scaling and fixed)
+    pub fn get_all_configured_queues(&self) -> Vec<String> {
         self.monitoring
             .as_ref()
             .map(|m| m.scaling.worker_per_queue.keys().cloned().collect())
@@ -375,7 +468,7 @@ retry:
         assert!(retry_config.should_retry(0));
         assert!(retry_config.should_retry(100));
         assert!(retry_config.should_retry(1000000)); // Should always retry with infinite retries
-        assert!(retry_config.is_infinite_retries()); // Should return true for -1
+        assert!(retry_config.max_attempts == -1); // Should be -1 for infinite retries
     }
 
     #[test]
@@ -439,5 +532,145 @@ retry:
         assert_eq!(mapping.get("default"), Some(&"demo".to_string()));
         assert_eq!(mapping.get("api_requests"), Some(&"api.requests".to_string()));
         assert_eq!(mapping.get("errors"), Some(&"errors".to_string()));
+    }
+
+    #[test]
+    fn test_worker_range_parsing() {
+        let yaml_content = r#"
+service:
+  name: "test-service"
+  version: "1.0.0"
+  description: "Test service"
+
+broker:
+  host: "localhost"
+  port: 61613
+  heartbeat:
+    client_send_secs: 30
+    client_receive_secs: 30
+  headers: {}
+
+destinations:
+  queues:
+    test_queue:
+      path: "/queue/test"
+      headers: {}
+  topics: {}
+
+consumers:
+  ack_mode: "client_individual"
+
+logging:
+  level: "info"
+  output: "stdout"
+
+shutdown:
+  timeout_secs: 30
+  grace_period_secs: 5
+
+monitoring:
+  enable: true
+  activemq:
+    base_url: "http://localhost:8161"
+    broker_name: "localhost"
+  scaling:
+    interval_secs: 5
+    worker_per_queue:
+      auto_scaling_queue: "1-4"
+      fixed_queue: "3"
+        "#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        
+        // Test auto-scaling queue parsing
+        let auto_range = config.get_queue_worker_range("auto_scaling_queue").unwrap();
+        assert_eq!(auto_range.min, 1);
+        assert_eq!(auto_range.max, 4);
+        assert!(!auto_range.is_fixed);
+        
+        // Test fixed worker queue parsing
+        let fixed_range = config.get_queue_worker_range("fixed_queue").unwrap();
+        assert_eq!(fixed_range.min, 3);
+        assert_eq!(fixed_range.max, 3);
+        assert!(fixed_range.is_fixed);
+        
+        // Test queue categorization
+        let auto_scaling_queues = config.get_auto_scaling_queues();
+        assert_eq!(auto_scaling_queues, vec!["auto_scaling_queue"]);
+        
+        let fixed_worker_queues = config.get_fixed_worker_queues();
+        assert_eq!(fixed_worker_queues, vec!["fixed_queue"]);
+        
+        // Test monitoring enabled
+        assert!(config.is_auto_scaling_enabled());
+        assert!(config.is_monitoring_configured());
+    }
+
+    #[test]
+    fn test_monitoring_disabled() {
+        let yaml_content = r#"
+service:
+  name: "test-service"
+  version: "1.0.0"
+  description: "Test service"
+
+broker:
+  host: "localhost"
+  port: 61613
+  heartbeat:
+    client_send_secs: 30
+    client_receive_secs: 30
+  headers: {}
+
+destinations:
+  queues:
+    test_queue:
+      path: "/queue/test"
+      headers: {}
+  topics: {}
+
+consumers:
+  ack_mode: "client_individual"
+
+logging:
+  level: "info"
+  output: "stdout"
+
+shutdown:
+  timeout_secs: 30
+  grace_period_secs: 5
+
+monitoring:
+  enable: false
+  activemq:
+    base_url: "http://localhost:8161"
+    broker_name: "localhost"
+  scaling:
+    interval_secs: 5
+    worker_per_queue:
+      auto_scaling_queue: "1-4"
+      fixed_queue: "3"
+        "#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        
+        // Test that when monitoring is disabled, ranges are converted to fixed at min value
+        let auto_range = config.get_queue_worker_range("auto_scaling_queue").unwrap();
+        assert_eq!(auto_range.min, 1);
+        assert_eq!(auto_range.max, 1); // Should be capped at min when disabled
+        assert!(auto_range.is_fixed);
+        
+        let fixed_range = config.get_queue_worker_range("fixed_queue").unwrap();
+        assert_eq!(fixed_range.min, 3);
+        assert_eq!(fixed_range.max, 3);
+        assert!(fixed_range.is_fixed);
+        
+        // Test that auto-scaling is properly disabled
+        assert!(!config.is_auto_scaling_enabled());
+        assert!(config.is_monitoring_configured());
+        
+        // When monitoring is disabled, get_auto_scaling_queues should return empty
+        let auto_scaling_queues = config.get_auto_scaling_queues();
+        assert_eq!(auto_scaling_queues, Vec::<String>::new());
     }
 }
