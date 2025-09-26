@@ -119,12 +119,12 @@ impl StompService {
         Ok(())
     }
 
-    /// Send message to a topic (simplified pattern following reference)
+    /// Send message to a topic with custom headers support
     pub async fn send_topic(
         &mut self,
         topic_name: &str,
         payload: &str,
-        _headers: HashMap<String, String>,
+        headers: HashMap<String, String>,
     ) -> Result<()> {
         // Ensure we have an active session
         if self.session.is_none() {
@@ -147,21 +147,36 @@ impl StompService {
 
         info!("📤 Sending message to topic: {}", destination);
 
-        // Send message using new comprehensive header support API with fluent chaining
-        let _timestamp = Utc::now().to_rfc3339();
+        // Send message using comprehensive header support API with fluent chaining
+        let mut message_builder = session.message(&destination, payload)
+            .with_content_type("text/plain"); // Set default content type
 
-        let message_builder = session.message(&destination, payload);
-        // .with_content_type("text/plain") // Set default content type
-        // .add_header("message-type", "topic")
-        // .add_header("timestamp", &timestamp);
+        // Add custom headers
+        if !headers.is_empty() {
+            // Check if we have priority override in custom headers
+            if let Some(priority_str) = headers.get("priority") {
+                if let Ok(priority) = priority_str.parse::<u8>() {
+                    let clamped_priority = priority.clamp(0, 9);
+                    message_builder = message_builder.add_header("JMSPriority", &clamped_priority.to_string());
+                    info!("📋 Setting topic message priority: {}", clamped_priority);
+                }
+            }
 
-        // Add custom headers using multiple approaches for demonstration
-        // if !headers.is_empty() {
-        //     // Method 1: Individual headers (most readable)
-        //     for (key, value) in &headers {
-        //         message_builder = message_builder.add_header(key, value);
-        //     }
-        // }
+            // Check if we have content-type override
+            if let Some(content_type) = headers.get("content-type") {
+                message_builder = message_builder.with_content_type(content_type);
+                info!("📄 Setting content-type: {}", content_type);
+            }
+
+            // Add remaining custom headers
+            let processed_headers = ["priority", "content-type"];
+            for (key, value) in &headers {
+                if !processed_headers.contains(&key.as_str()) {
+                    message_builder = message_builder.add_header(key, value);
+                    info!("🏷️ Adding custom topic header: {} = {}", key, value);
+                }
+            }
+        }
 
         // Send message and handle result with match
         match message_builder.send().await {
@@ -176,12 +191,12 @@ impl StompService {
         }
     }
 
-    /// Send message to a queue (simplified pattern following reference)
+    /// Send message to a queue with priority and persistence support
     pub async fn send_queue(
         &mut self,
         queue_name: &str,
         payload: &str,
-        _headers: HashMap<String, String>,
+        headers: HashMap<String, String>,
     ) -> Result<()> {
         // Ensure we have an active session
         if self.session.is_none() {
@@ -204,35 +219,72 @@ impl StompService {
 
         info!("📤 Sending message to queue: {}", destination);
 
-        // Send message using new comprehensive header support API with advanced features
-        let _timestamp = Utc::now().to_rfc3339();
-
-        let message_builder = session.message(&destination, payload);
-        // .with_content_type("text/plain") // Set default content type
-        // .add_header("message-type", "queue")
-        // .add_header("timestamp", &timestamp);
+        // Send message using comprehensive header support API with advanced features
+        let mut message_builder = session.message(&destination, payload)
+            .with_content_type("text/plain"); // Set default content type
 
         // Add custom headers with enhanced functionality
-        // if !headers.is_empty() {
-        //     // Check if we have priority override in custom headers
-        //     if let Some(priority_str) = headers.get("priority") {
-        //         if let Ok(priority) = priority_str.parse::<u8>() {
-        //             message_builder = message_builder.with_priority(priority);
-        //         }
-        //     }
+        if !headers.is_empty() {
+            // Check if we have priority override in custom headers
+            if let Some(priority_str) = headers.get("priority") {
+                if let Ok(priority) = priority_str.parse::<u8>() {
+                    // Priority range: 0-9 (0 = lowest, 9 = highest)
+                    let clamped_priority = priority.clamp(0, 9);
+                    // Use JMSPriority header for ActiveMQ compatibility
+                    message_builder = message_builder.add_header("JMSPriority", &clamped_priority.to_string());
+                    info!("📋 Setting message priority: {}", clamped_priority);
+                }
+            }
 
-        //     // Check if we have content-type override
-        //     if let Some(content_type) = headers.get("content-type") {
-        //         message_builder = message_builder.with_content_type(content_type);
-        //     }
+            // Check for persistent/non-persistent delivery mode
+            if let Some(persistent_str) = headers.get("persistent") {
+                match persistent_str.to_lowercase().as_str() {
+                    "true" | "1" | "yes" => {
+                        // Persistent delivery (messages survive broker restart)
+                        // Use JMSDeliveryMode: 2 = PERSISTENT, 1 = NON_PERSISTENT
+                        message_builder = message_builder.add_header("JMSDeliveryMode", "2");
+                        info!("💾 Setting persistent delivery mode");
+                    }
+                    "false" | "0" | "no" => {
+                        // Non-persistent delivery (faster but messages lost on broker restart)
+                        message_builder = message_builder.add_header("JMSDeliveryMode", "1");
+                        info!("🚀 Setting non-persistent delivery mode");
+                    }
+                    _ => {
+                        // Invalid value, default to persistent for safety
+                        message_builder = message_builder.add_header("JMSDeliveryMode", "2");
+                        info!("💾 Invalid persistent value '{}', defaulting to persistent", persistent_str);
+                    }
+                }
+            }
 
-        //     // Add remaining custom headers (excluding ones we already processed)
-        //     for (key, value) in &headers {
-        //         if key != "priority" && key != "content-type" {
-        //             message_builder = message_builder.add_header(key, value);
-        //         }
-        //     }
-        // }
+            // Check for TTL (Time-To-Live)
+            if let Some(ttl_str) = headers.get("ttl") {
+                if let Ok(ttl_ms) = ttl_str.parse::<u64>() {
+                    // Use JMSExpiration header for ActiveMQ compatibility
+                    let expiry_time = chrono::Utc::now().timestamp_millis() as u64 + ttl_ms;
+                    message_builder = message_builder.add_header("JMSExpiration", &expiry_time.to_string());
+                    info!("⏰ Setting message TTL: {}ms (expires at: {})", ttl_ms, expiry_time);
+                }
+            }
+
+            // Check if we have content-type override
+            if let Some(content_type) = headers.get("content-type") {
+                message_builder = message_builder.with_content_type(content_type);
+                info!("📄 Setting content-type: {}", content_type);
+            }
+
+            // Add remaining custom headers (excluding ones we already processed)
+            let processed_headers = ["priority", "persistent", "ttl", "content-type"];
+            for (key, value) in &headers {
+                if !processed_headers.contains(&key.as_str()) {
+                    message_builder = message_builder.add_header(key, value);
+                    info!("🏷️ Adding custom header: {} = {}", key, value);
+                }
+            }
+        }
+
+        // Ready to send message with proper ActiveMQ-compatible headers
 
         // Send message and handle result with match
         match message_builder.send().await {
