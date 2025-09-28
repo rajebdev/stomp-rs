@@ -78,12 +78,12 @@ impl StompService {
         let (send_heartbeat, recv_heartbeat) = self.config.get_heartbeat_ms();
         debug!(
             "Connecting to STOMP broker at {}:{}",
-            self.config.broker.host, self.config.broker.port
+            self.config.activemq.host, self.config.activemq.stomp_port
         );
 
         // Build session using the reference pattern with option setters
         let mut session_builder =
-            SessionBuilder::new(&self.config.broker.host, self.config.broker.port)
+            SessionBuilder::new(&self.config.activemq.host, self.config.activemq.stomp_port)
                 .with(WithHeartBeat(HeartBeat(send_heartbeat, recv_heartbeat)));
 
         // Add credentials if available
@@ -98,11 +98,6 @@ impl StompService {
         session_builder =
             session_builder.with(WithHeader(Header::new("custom-client-id", &client_id)));
 
-        // Add custom headers
-        for (key, value) in &self.config.broker.headers {
-            session_builder = session_builder.with(WithHeader(Header::new(key, value)));
-        }
-
         let session = session_builder
             .start()
             .await
@@ -110,7 +105,7 @@ impl StompService {
 
         self.session = Some(session);
         self.is_connected.store(true, Ordering::Relaxed);
-        info!("Connected to STOMP broker {}:{}", self.config.broker.host, self.config.broker.port);
+        info!("Connected to STOMP broker {}:{}", self.config.activemq.host, self.config.activemq.stomp_port);
         debug!("Connection established with client-id: {}", client_id);
 
         Ok(())
@@ -134,8 +129,8 @@ impl StompService {
             .ok_or_else(|| anyhow::anyhow!("No active STOMP session"))?;
 
         // Build destination path - try config first, then fallback to direct path
-        let destination = if let Some(topic_config) = self.config.get_topic_config(topic_name) {
-            topic_config.path.clone()
+        let destination = if let Some(topic_path) = self.config.get_topic_config(topic_name) {
+            topic_path.clone()
         } else if topic_name.starts_with("/topic/") {
             topic_name.to_string()
         } else {
@@ -206,8 +201,8 @@ impl StompService {
             .ok_or_else(|| anyhow::anyhow!("No active STOMP session"))?;
 
         // Build destination path - try config first, then fallback to direct path
-        let destination = if let Some(queue_config) = self.config.get_queue_config(queue_name) {
-            queue_config.path.clone()
+        let destination = if let Some(queue_path) = self.config.get_queue_config(queue_name) {
+            queue_path.clone()
         } else if queue_name.starts_with("/queue/") {
             queue_name.to_string()
         } else {
@@ -306,8 +301,8 @@ impl StompService {
             + 'static,
     {
         // Try to get topic configuration, fallback to direct path
-        let topic_path = if let Some(topic_config) = self.config.get_topic_config(topic_name) {
-            topic_config.path.clone()
+        let topic_path = if let Some(topic_path_config) = self.config.get_topic_config(topic_name) {
+            topic_path_config.clone()
         } else if topic_name.starts_with("/topic/") {
             topic_name.to_string()
         } else {
@@ -468,8 +463,8 @@ impl StompService {
             + 'static,
     {
         // Try to get queue configuration, fallback to direct path
-        let queue_path = if let Some(queue_config) = self.config.get_queue_config(queue_name) {
-            queue_config.path.clone()
+        let queue_path = if let Some(queue_path_config) = self.config.get_queue_config(queue_name) {
+            queue_path_config.clone()
         } else if queue_name.starts_with("/queue/") {
             queue_name.to_string()
         } else {

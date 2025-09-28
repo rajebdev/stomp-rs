@@ -8,15 +8,19 @@ use std::time::Duration;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub service: ServiceConfig,
-    pub broker: BrokerConfig,
+    pub activemq: ActiveMQConfig,
     pub destinations: DestinationsConfig,
+    #[serde(default = "ScalingConfig::default")]
+    pub scaling: ScalingConfig,
+    // Optional configs with defaults
+    #[serde(default = "ConsumersConfig::default")]
     pub consumers: ConsumersConfig,
+    #[serde(default = "LoggingConfig::default")]
     pub logging: LoggingConfig,
+    #[serde(default = "ShutdownConfig::default")]
     pub shutdown: ShutdownConfig,
     #[serde(default = "RetryConfig::default")]
     pub retry: RetryConfig,
-    #[serde(default)]
-    pub monitoring: Option<MonitoringConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -26,25 +30,17 @@ pub struct ServiceConfig {
     pub description: String,
 }
 
+/// Unified ActiveMQ configuration for both STOMP and monitoring
 #[derive(Debug, Deserialize, Clone)]
-pub struct BrokerConfig {
+pub struct ActiveMQConfig {
     pub host: String,
-    pub port: u16,
-    pub credentials: Option<CredentialsConfig>,
-    pub heartbeat: HeartbeatConfig,
-    pub headers: HashMap<String, String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CredentialsConfig {
     pub username: String,
     pub password: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct HeartbeatConfig {
-    pub client_send_secs: u32,
-    pub client_receive_secs: u32,
+    pub stomp_port: u16,
+    pub web_port: u16,
+    pub heartbeat_secs: u32,
+    #[serde(default = "default_broker_name")]
+    pub broker_name: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -58,21 +54,13 @@ pub struct RetryConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DestinationsConfig {
-    pub queues: HashMap<String, DestinationConfig>,
-    pub topics: HashMap<String, DestinationConfig>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct DestinationConfig {
-    pub path: String,
-    pub headers: HashMap<String, String>,
+    pub queues: HashMap<String, String>,  // queue_name -> path
+    pub topics: HashMap<String, String>,  // topic_name -> path
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConsumersConfig {
     pub ack_mode: String,
-    // workers_per_queue removed - now using auto-scaling configuration
-    // workers_per_topic removed - topics always use 1 worker
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -88,33 +76,14 @@ pub struct ShutdownConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct MonitoringConfig {
-    /// Enable/disable monitoring
-    #[serde(default = "default_monitoring_enabled")]
-    pub enable: bool,
-    /// ActiveMQ management console configuration
-    pub activemq: ActiveMQMonitoringConfig,
-    /// Auto-scaling configuration
-    pub scaling: ScalingConfig,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ActiveMQMonitoringConfig {
-    /// ActiveMQ management console URL (e.g., http://localhost:8161)
-    pub base_url: String,
-    /// Optional credentials for ActiveMQ management console
-    pub credentials: Option<CredentialsConfig>,
-    /// Broker name (usually "localhost" for default installations)
-    #[serde(default = "default_broker_name")]
-    pub broker_name: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct ScalingConfig {
+    /// Enable/disable auto-scaling
+    #[serde(default = "default_scaling_enabled")]
+    pub enabled: bool,
     /// Polling interval in seconds for checking queue metrics
     pub interval_secs: u64,
     /// Queue-specific worker scaling rules
-    pub worker_per_queue: HashMap<String, String>,
+    pub workers: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -128,7 +97,7 @@ fn default_broker_name() -> String {
     "localhost".to_string()
 }
 
-fn default_monitoring_enabled() -> bool {
+fn default_scaling_enabled() -> bool {
     true
 }
 
@@ -169,6 +138,42 @@ impl Default for RetryConfig {
     }
 }
 
+impl Default for ConsumersConfig {
+    fn default() -> Self {
+        Self {
+            ack_mode: "client_individual".to_string(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            output: "stdout".to_string(),
+        }
+    }
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 30,
+            grace_period_secs: 5,
+        }
+    }
+}
+
+impl Default for ScalingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: 5,
+            workers: HashMap::new(),
+        }
+    }
+}
+
 impl Config {
     /// Load configuration from a YAML file
     pub fn load(path: &str) -> Result<Self> {
@@ -182,30 +187,25 @@ impl Config {
     }
 
 
-    /// Get credentials if available
+    /// Get credentials
     pub fn get_credentials(&self) -> Option<(String, String)> {
-        self.broker
-            .credentials
-            .as_ref()
-            .map(|creds| (creds.username.clone(), creds.password.clone()))
+        Some((self.activemq.username.clone(), self.activemq.password.clone()))
     }
 
-    /// Get a specific queue configuration
-    pub fn get_queue_config(&self, name: &str) -> Option<&DestinationConfig> {
+    /// Get a specific queue path
+    pub fn get_queue_config(&self, name: &str) -> Option<&String> {
         self.destinations.queues.get(name)
     }
 
-    /// Get a specific topic configuration
-    pub fn get_topic_config(&self, name: &str) -> Option<&DestinationConfig> {
+    /// Get a specific topic path
+    pub fn get_topic_config(&self, name: &str) -> Option<&String> {
         self.destinations.topics.get(name)
     }
 
     /// Get heartbeat settings in milliseconds (converting from seconds)
     pub fn get_heartbeat_ms(&self) -> (u32, u32) {
-        (
-            self.broker.heartbeat.client_send_secs * 1000,
-            self.broker.heartbeat.client_receive_secs * 1000,
-        )
+        let ms = self.activemq.heartbeat_secs * 1000;
+        (ms, ms)
     }
 
     /// Get all configured queue names
@@ -218,19 +218,19 @@ impl Config {
         self.destinations.topics.keys().cloned().collect()
     }
 
-    /// Get auto-scaling configuration if enabled
-    pub fn get_monitoring_config(&self) -> Option<&MonitoringConfig> {
-        self.monitoring.as_ref()
+    /// Get auto-scaling configuration
+    pub fn get_monitoring_config(&self) -> &ScalingConfig {
+        &self.scaling
     }
 
     /// Check if auto-scaling is enabled
     pub fn is_auto_scaling_enabled(&self) -> bool {
-        self.monitoring.as_ref().map_or(false, |m| m.enable)
+        self.scaling.enabled
     }
     
     /// Check if monitoring is configured (even if disabled)
     pub fn is_monitoring_configured(&self) -> bool {
-        self.monitoring.is_some()
+        true // Always configured now
     }
 
     /// Parse worker configuration string (e.g., "1-4" or "2")
@@ -261,17 +261,13 @@ impl Config {
     
     /// Get worker range for a specific queue
     pub fn get_queue_worker_range(&self, queue_name: &str) -> Option<WorkerRange> {
-        self.monitoring
-            .as_ref()
-            .and_then(|m| m.scaling.worker_per_queue.get(queue_name))
+        self.scaling.workers.get(queue_name)
             .and_then(|config_str| Self::parse_worker_config(config_str).ok())
             .map(|mut range| {
-                // If monitoring is disabled, set both min and max to min value
-                if let Some(monitoring) = &self.monitoring {
-                    if !monitoring.enable {
-                        range.max = range.min;
-                        range.is_fixed = true;
-                    }
+                // If scaling is disabled, set both min and max to min value
+                if !self.scaling.enabled {
+                    range.max = range.min;
+                    range.is_fixed = true;
                 }
                 range
             })
@@ -279,75 +275,62 @@ impl Config {
 
     /// Get all queues configured for auto-scaling
     pub fn get_auto_scaling_queues(&self) -> Vec<String> {
-        self.monitoring
-            .as_ref()
-            .map(|m| {
-                m.scaling.worker_per_queue.keys()
-                    .filter(|queue_name| {
-                        // Only include queues that have range format (e.g., "1-4")
-                        // and monitoring is enabled
-                        if !m.enable {
-                            return false;
-                        }
-                        if let Some(config_str) = m.scaling.worker_per_queue.get(*queue_name) {
-                            config_str.contains('-')
-                        } else {
-                            false
-                        }
-                    })
-                    .cloned()
-                    .collect()
+        if !self.scaling.enabled {
+            return Vec::new();
+        }
+        
+        self.scaling.workers.keys()
+            .filter(|queue_name| {
+                // Only include queues that have range format (e.g., "1-4")
+                if let Some(config_str) = self.scaling.workers.get(*queue_name) {
+                    config_str.contains('-')
+                } else {
+                    false
+                }
             })
-            .unwrap_or_default()
+            .cloned()
+            .collect()
     }
     
     /// Get all queues configured with fixed worker counts
     pub fn get_fixed_worker_queues(&self) -> Vec<String> {
-        self.monitoring
-            .as_ref()
-            .map(|m| {
-                m.scaling.worker_per_queue.keys()
-                    .filter(|queue_name| {
-                        if let Some(config_str) = m.scaling.worker_per_queue.get(*queue_name) {
-                            !config_str.contains('-')
-                        } else {
-                            false
-                        }
-                    })
-                    .cloned()
-                    .collect()
+        self.scaling.workers.keys()
+            .filter(|queue_name| {
+                if let Some(config_str) = self.scaling.workers.get(*queue_name) {
+                    !config_str.contains('-')
+                } else {
+                    false
+                }
             })
-            .unwrap_or_default()
+            .cloned()
+            .collect()
     }
     
     /// Get all configured queue workers (both auto-scaling and fixed)
     pub fn get_all_configured_queues(&self) -> Vec<String> {
-        self.monitoring
-            .as_ref()
-            .map(|m| m.scaling.worker_per_queue.keys().cloned().collect())
-            .unwrap_or_default()
+        self.scaling.workers.keys().cloned().collect()
     }
 
     /// Get the monitoring interval in seconds
     pub fn get_monitoring_interval_secs(&self) -> Option<u64> {
-        self.monitoring.as_ref().map(|m| m.scaling.interval_secs)
+        Some(self.scaling.interval_secs)
     }
 
 
     /// Get the actual ActiveMQ queue name from config key
-    /// Converts from destinations.queues.key.path to just the queue name
+    /// Converts from destinations.queues.key path to just the queue name
     /// Example: "/queue/demo" -> "demo", "/queue/api.requests" -> "api.requests"
     pub fn get_activemq_queue_name(&self, queue_config_key: &str) -> Option<String> {
         self.destinations
             .queues
             .get(queue_config_key)
-            .map(|config| {
+            .map(|path| {
                 // Extract queue name from path like "/queue/demo" -> "demo"
-                if config.path.starts_with("/queue/") {
-                    config.path.strip_prefix("/queue/").unwrap_or(&config.path).to_string()
+                if path.starts_with("/queue/") {
+                    path.strip_prefix("/queue/").unwrap_or(path).to_string()
                 } else {
                     // Fallback to full path if it doesn't follow expected format
-                    config.path.clone()
+                    path.clone()
                 }
             })
     }
@@ -356,7 +339,7 @@ impl Config {
     pub fn get_queue_key_to_activemq_name_mapping(&self) -> std::collections::HashMap<String, String> {
         let mut mapping = std::collections::HashMap::new();
         
-        for (config_key, _queue_config) in &self.destinations.queues {
+        for (config_key, _queue_path) in &self.destinations.queues {
             if let Some(activemq_name) = self.get_activemq_queue_name(config_key) {
                 mapping.insert(config_key.clone(), activemq_name);
             }

@@ -31,12 +31,8 @@ impl AutoScaler {
         consumer_pools: HashMap<String, ConsumerPool>,
         shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<Self> {
-        let monitoring_config = config
-            .get_monitoring_config()
-            .ok_or_else(|| anyhow::anyhow!("Auto-scaling configuration not found"))?;
-
-        // Create ActiveMQ monitor
-        let monitor = ActiveMQMonitor::new(monitoring_config.activemq.clone())?;
+        // Create ActiveMQ monitor using unified config
+        let monitor = ActiveMQMonitor::new(config.activemq.clone())?;
 
         // Create scaling engine
         let scaling_engine = ScalingEngine::new(0); // Parameter not used anymore

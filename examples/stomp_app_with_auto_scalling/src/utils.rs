@@ -32,7 +32,7 @@ pub fn display_startup_info(config: &Config) {
     );
     info!("📋 Version: {}", config.service.version);
     info!("📄 Description: {}", config.service.description);
-    info!("🔗 Broker: {}:{}", config.broker.host, config.broker.port);
+    info!("🔗 Broker: {}:{}", config.activemq.host, config.activemq.stomp_port);
 }
 
 /// Setup signal handlers for graceful shutdown

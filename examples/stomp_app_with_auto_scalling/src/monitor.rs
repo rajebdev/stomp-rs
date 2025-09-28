@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use crate::config::ActiveMQMonitoringConfig;
+use crate::config::ActiveMQConfig;
 
 #[derive(Error, Debug)]
 pub enum MonitoringError {
@@ -52,14 +52,14 @@ struct JolokiaResponse {
 /// ActiveMQ monitoring client
 pub struct ActiveMQMonitor {
     client: Client,
-    config: ActiveMQMonitoringConfig,
+    config: ActiveMQConfig,
     retry_count: u32,
     max_retries: u32,
 }
 
 impl ActiveMQMonitor {
     /// Create a new ActiveMQ monitoring client
-    pub fn new(config: ActiveMQMonitoringConfig) -> Result<Self> {
+    pub fn new(config: ActiveMQConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent("stomp-autoscaler/1.0")
@@ -115,20 +115,18 @@ impl ActiveMQMonitor {
             self.config.broker_name, queue_name
         );
         
+        let base_url = format!("http://{}:{}", self.config.host, self.config.web_port);
         let jolokia_url = format!(
             "{}/api/jolokia/read/{}",
-            self.config.base_url.trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             urlencoding::encode(&queue_object_name)
         );
 
         debug!("Fetching queue metrics from: {}", jolokia_url);
 
-        // Make the HTTP request with optional basic auth
-        let mut request_builder = self.client.get(&jolokia_url);
-        
-        if let Some(ref creds) = self.config.credentials {
-            request_builder = request_builder.basic_auth(&creds.username, Some(&creds.password));
-        }
+        // Make the HTTP request with basic auth
+        let request_builder = self.client.get(&jolokia_url)
+            .basic_auth(&self.config.username, Some(&self.config.password));
         
         let response = request_builder
             .send()
@@ -234,17 +232,16 @@ impl ActiveMQMonitor {
 
     /// Health check - verify connectivity to ActiveMQ management API
     pub async fn health_check(&mut self) -> Result<bool> {
+        let base_url = format!("http://{}:{}", self.config.host, self.config.web_port);
         let health_url = format!(
             "{}/api/jolokia/version",
-            self.config.base_url.trim_end_matches('/')
+            base_url.trim_end_matches('/')
         );
 
         debug!("Health check URL: {}", health_url);
 
-        let mut request_builder = self.client.get(&health_url);
-        if let Some(ref creds) = self.config.credentials {
-            request_builder = request_builder.basic_auth(&creds.username, Some(&creds.password));
-        }
+        let request_builder = self.client.get(&health_url)
+            .basic_auth(&self.config.username, Some(&self.config.password));
 
         match request_builder.send().await {
             Ok(response) if response.status().is_success() => {

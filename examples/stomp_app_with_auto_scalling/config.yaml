@@ -1,8 +1,5 @@
-# STOMP Service Boilerplate Configuration
-#
-# This configuration file demonstrates all available options for the STOMP service.
-# All values can be overridden with environment variables using the pattern:
-# STOMP_SECTION_FIELD (e.g., STOMP_BROKER_HOST=activemq.company.com)
+# STOMP Service Configuration
+# Simplified version with unified ActiveMQ configuration
 
 # Service metadata
 service:
@@ -10,128 +7,65 @@ service:
   version: "1.0.0"
   description: "Production STOMP messaging service"
 
-# STOMP broker connection settings
-broker:
-  # Broker connection details
-  host: "10.0.7.127"  # Override with: STOMP_BROKER_HOST
-  port: 31333        # Override with: STOMP_BROKER_PORT
+# Unified ActiveMQ server configuration
+# This replaces both 'broker' and 'monitoring.activemq' sections
+activemq:
+  host: "10.0.7.127"
+  username: "admin"
+  password: "admin"
   
-  # Authentication (optional) - matching reference implementation
-  credentials:
-    username: "admin"     # Override with: STOMP_BROKER_USERNAME
-    password: "admin"       # Override with: STOMP_BROKER_PASSWORD
+  # Protocol-specific ports
+  stomp_port: 31333       # STOMP messaging port
+  web_port: 8131          # Web console/monitoring port
   
-  # Connection heartbeat settings (matching reference: 5000ms send, 2000ms receive)
-  heartbeat:
-    client_send_secs: 30         # Heartbeat interval for client->server (converted to ms internally)
-    client_receive_secs: 30      # Expected heartbeat interval from server (converted to ms internally)
-  
-  # Custom headers to send with CONNECT frame
-  headers: {}
+  # Connection settings
+  heartbeat_secs: 30      # Heartbeat interval
+  broker_name: "localhost" # ActiveMQ broker name
 
-# Message destinations configuration
+# Message destinations
 destinations:
-  # Queue configurations
+  # Queue configurations - only specify if custom path needed
   queues:
-    # Default demo queue
-    default:
-      path: "/queue/demo"
-      headers: {}
-    
-    # Test queue matching reference implementation
-    modern_major_general_0:
-      path: "/queue/modern_major_general_0"
-      headers: {}
-    
-    # API requests queue
-    api_requests:
-      path: "/queue/api.requests"
-      headers:
-        persistent: "true"
-    
-    # Error handling queue
-    errorsx:
-      path: "/queue/errorsx"
-      headers:
-        persistent: "true"
-        priority: "high"
+    default: "/queue/demo"
+    modern_major_general_0: "/queue/modern_major_general_0"
+    api_requests: "/queue/api.requests"
+    errorsx: "/queue/errorsx"
   
   # Topic configurations
   topics:
-    # Notification events topic
-    notifications:
-      path: "/topic/notifications"
-      headers: {}
-    
-    # System events topic
-    events:
-      path: "/topic/events"  
-      headers:
-        persistent: "false"
+    notifications: "/topic/notifications"
+    events: "/topic/events"
 
-# Consumer settings
-consumers:
-  # Acknowledgment mode - always use client_individual for precise control
-  ack_mode: "client_individual"
+# Auto-scaling configuration
+scaling:
+  # Enable/disable auto-scaling
+  enabled: true
   
-  # Static worker configuration is REMOVED - now using auto-scaling min values
-  # workers_per_queue: REMOVED - using monitoring.scaling.worker_per_queue.min as starting point
+  # Monitoring interval
+  interval_secs: 5
   
-  # Topics always use 1 worker (no configuration needed)
+  # Worker scaling rules per queue
+  # Format: "min-max" for auto-scaling or "count" for fixed workers
+  workers:
+    default: "1-4"                    # Auto-scaling: 1-4 workers
+    modern_major_general_0: "1-2"     # Auto-scaling: 1-2 workers  
+    api_requests: "2-6"               # Auto-scaling: 2-6 workers
+    errorsx: "2"                      # Fixed: exactly 2 workers
 
-# Logging configuration  
-logging:
-  # Log level: trace, debug, info, warn, error
-  level: "info"  # Override with: STOMP_LOGGING_LEVEL
-  
-  # Output destination: stdout, stderr, or file path
-  output: "stdout"  # Override with: STOMP_LOGGING_OUTPUT
+# Optional: Override defaults only if needed
+# consumers:
+#   ack_mode: "client_individual"   # Default: client_individual
 
-# Connection retry settings for auto-reconnect functionality
-retry:
-  # Maximum number of reconnection attempts before giving up
-  # Set to -1 for infinite retries (recommended for production)
-  max_attempts: -1  # Use positive number (e.g., 5) for finite retries
-  
-  # Initial delay in milliseconds for the first retry attempt
-  initial_delay_ms: 1000  # Override with: STOMP_RETRY_INITIAL_DELAY_MS
-  
-  # Maximum delay in milliseconds between retry attempts
-  max_delay_ms: 30000  # Override with: STOMP_RETRY_MAX_DELAY_MS
-  
-  # Multiplier for exponential backoff (each retry delay = previous * multiplier)
-  backoff_multiplier: 2.0  # Override with: STOMP_RETRY_BACKOFF_MULTIPLIER
+# logging:
+#   level: "info"                   # Default: info, use RUST_LOG env var instead
+#   output: "stdout"                # Default: stdout
 
-# Graceful shutdown settings
-shutdown:
-  # Maximum time to wait for graceful shutdown
-  timeout_secs: 5  # Override with: STOMP_SHUTDOWN_TIMEOUT_SECS
-  
-  # Time to wait for in-flight messages to complete
-  grace_period_secs: 5  # Override with: STOMP_SHUTDOWN_GRACE_PERIOD_SECS
+# retry:
+#   max_attempts: -1                # Default: infinite retries
+#   initial_delay_ms: 1000          # Default: 1 second
+#   max_delay_ms: 30000             # Default: 30 seconds
+#   backoff_multiplier: 2.0         # Default: exponential backoff
 
-# Auto-scaling monitoring configuration (optional)
-monitoring:
-  # Enable/disable monitoring and auto-scaling
-  enable: true  # Set to false to disable auto-scaling and use min worker counts
-  
-  # ActiveMQ management console settings
-  activemq:
-    base_url: "http://10.0.7.127:8131"  # ActiveMQ management console URL
-    broker_name: "localhost"             # Broker name (usually "localhost")
-    credentials:                          # Optional credentials for management console
-      username: "admin"
-      password: "admin"
-  
-  # Auto-scaling configuration
-  scaling:
-    interval_secs: 5                    # Check queue metrics every 5 seconds
-    
-    # Queue-specific worker scaling rules:
-    # Format: "min-max" for auto-scaling (e.g., "1-4") or "count" for fixed workers (e.g., "2")
-    # Note: Use the same key names as in destinations.queues section
-    worker_per_queue:
-      default: "1-4"                    # Auto-scaling: 1-4 workers
-      modern_major_general_0: "1-2"     # Auto-scaling: 1-2 workers
-      api_requests: "2-6"               # Auto-scaling: 2-6 workers
-      errorsx: "2"                       # Fixed: 2 workers
+# shutdown:
+#   timeout_secs: 30                # Default: 30 seconds
+#   grace_period_secs: 5            # Default: 5 seconds
